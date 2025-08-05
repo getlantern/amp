@@ -121,8 +121,16 @@ type roundTripper struct {
 }
 
 func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	// TODO: if theer's a request payload, encode
-	response, err := r.Exchange(nil)
+	var body []byte
+	if req.Body != nil {
+		var err error
+		body, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		req.Body.Close()
+	}
+	response, err := r.Exchange(body)
 	if err != nil {
 		return nil, err
 	}
