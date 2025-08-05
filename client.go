@@ -1,4 +1,5 @@
-package main
+// Package amp implements an AMP client for communicating with an AMP broker.
+package amp
 
 import (
 	"bufio"
