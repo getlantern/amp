@@ -174,12 +174,12 @@ func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 func encodeRequest(req *http.Request) ([]byte, error) {
 	var message ClientRequest
 	message.Method = req.Method
-	message.URL = req.URL.String()
+	message.Headers = req.Header
 	message.Host = req.Host
 	if req.URL != nil {
 		message.Host = req.URL.Host
+		message.URL = req.URL.String()
 	}
-	message.Headers = req.Header
 	if req.Body != nil {
 		body, err := io.ReadAll(req.Body)
 		if err != nil {
