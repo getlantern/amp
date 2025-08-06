@@ -2,11 +2,14 @@
 package amp
 
 import (
-	"bufio"
 	"bytes"
+	crand "crypto/rand"
+	"crypto/rsa"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -25,11 +28,12 @@ type client struct {
 	fronts           []string
 	transport        http.RoundTripper
 	maxNumberOfBytes int64
+	publicKey        *rsa.PublicKey
 }
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")
 
-func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.RoundTripper, maxNumberOfBytes int64) Client {
+func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.RoundTripper, maxNumberOfBytes int64, publicKey *rsa.PublicKey) Client {
 	//Maximum number of bytes to be read from an HTTP response
 	if maxNumberOfBytes == 0 {
 		maxNumberOfBytes = 100000
@@ -40,6 +44,7 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 		fronts:           fronts,
 		transport:        transport,
 		maxNumberOfBytes: maxNumberOfBytes,
+		publicKey:        publicKey,
 	}
 }
 
@@ -59,7 +64,7 @@ func (c *client) Exchange(encodedPayload []byte) ([]byte, error) {
 		}
 	}
 
-	req, err := http.NewRequest("GET", reqURL.String(), nil)
+	req, err := http.NewRequest("GET", reqURL.String(), http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +73,7 @@ func (c *client) Exchange(encodedPayload []byte) ([]byte, error) {
 		// Do domain fronting. Replace the domain in the URL's with a randomly
 		// selected front, and store the original domain the HTTP Host header.
 		front := c.fronts[rand.Intn(len(c.fronts))]
-		log.Println("Front domain:", front)
+		slog.Debug("Selected front domain", slog.String("front", front))
 		req.Host = req.URL.Host
 		req.URL.Host = front
 	}
@@ -79,7 +84,6 @@ func (c *client) Exchange(encodedPayload []byte) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	log.Printf("AMP cache rendezvous response: %s", resp.Status)
 	if resp.StatusCode != http.StatusOK {
 		// A non-200 status indicates an error:
 		// * If the broker returns a page with invalid AMP, then the AMP
@@ -121,22 +125,93 @@ type roundTripper struct {
 	*client
 }
 
+// ClientRequest is a struct that represents an HTTP request so it can
+// be encoded into JSON, encrypted with the RSA public key by the client
+// and decryptod/decoded by the broker
+type ClientRequest struct {
+	Method  string      `json:"method"`
+	Host    string      `json:"host"`
+	URL     string      `json:"url,omitempty"`
+	Body    []byte      `json:"body"`
+	Headers http.Header `json:"headers"`
+}
+
+// BrokerResponse is a struct that represents an HTTP response.
+type BrokerResponse struct {
+	StatusCode    int         `json:"status_code"`
+	StatusText    string      `json:"status_text"`
+	ContentLength int64       `json:"content_length"`
+	Headers       http.Header `json:"headers"`
+	Body          []byte      `json:"body"`
+}
+
+// RoundTrip implements the http.RoundTripper interface for the AMP client.
+// It encodes the HTTP request, encrypts it with the RSA public key,
+// sends it to the AMP broker, and decodes the response back into an HTTP response.
 func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	var body []byte
-	if req.Body != nil {
-		var err error
-		body, err = io.ReadAll(req.Body)
-		if err != nil {
-			return nil, err
-		}
-		req.Body.Close()
+	payload, err := encodeRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't encrypt request: %w", err)
 	}
-	response, err := r.Exchange(body)
+
+	encryptedPayload, err := r.encryptWithRSAPublicKey(payload)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't encrypt request: %w", err)
+	}
+
+	response, err := r.Exchange(encryptedPayload)
 	if err != nil {
 		return nil, err
 	}
 
-	return http.ReadResponse(bufio.NewReader(bytes.NewBuffer(response)), req)
+	return decodeResponse(response)
+}
+
+func encodeRequest(req *http.Request) ([]byte, error) {
+	var message ClientRequest
+	message.Method = req.Method
+	message.URL = req.URL.String()
+	message.Host = req.Host
+	if req.URL != nil {
+		message.Host = req.URL.Host
+	}
+	message.Headers = req.Header
+	if req.Body != nil {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("couldn't read request body: %w", err)
+		}
+		req.Body.Close()
+		message.Body = body
+	}
+
+	payload, err := json.Marshal(message)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't marshal request: %w", err)
+	}
+
+	return payload, nil
+}
+
+func decodeResponse(encodedResponse []byte) (*http.Response, error) {
+	var response BrokerResponse
+	if err := json.Unmarshal(encodedResponse, &response); err != nil {
+		return nil, fmt.Errorf("couldn't unmarshal response: %w", err)
+	}
+
+	resp := &http.Response{
+		Status:        response.StatusText,
+		StatusCode:    response.StatusCode,
+		Header:        response.Headers,
+		ContentLength: int64(len(response.Body)),
+		Body:          io.NopCloser(bytes.NewBuffer(response.Body)),
+	}
+
+	return resp, nil
+}
+
+func (c *client) encryptWithRSAPublicKey(data []byte) ([]byte, error) {
+	return rsa.EncryptPKCS1v15(crand.Reader, c.publicKey, data)
 }
 
 func (c *client) RoundTripper() (http.RoundTripper, error) {
