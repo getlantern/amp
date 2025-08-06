@@ -33,6 +33,8 @@ type client struct {
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")
 
+// NewClient creates a new AMP client that can communicate with an AMP broker.
+// If the maxNumberOfBytes is set to 0, it defaults to 100000 bytes.
 func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.RoundTripper, maxNumberOfBytes int64, publicKey *rsa.PublicKey) Client {
 	//Maximum number of bytes to be read from an HTTP response
 	if maxNumberOfBytes == 0 {
@@ -48,6 +50,7 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 	}
 }
 
+// Exchange sends an encoded payload to the AMP broker and returns the response.
 func (c *client) Exchange(encodedPayload []byte) ([]byte, error) {
 	// We cannot POST a body through an AMP cache, so instead we GET and
 	// encode the client poll request message into the URL.
@@ -214,6 +217,7 @@ func (c *client) encryptWithRSAPublicKey(data []byte) ([]byte, error) {
 	return rsa.EncryptPKCS1v15(crand.Reader, c.publicKey, data)
 }
 
+// RoundTripper returns an http.RoundTripper that can be used to send HTTP requests
 func (c *client) RoundTripper() (http.RoundTripper, error) {
 	return &roundTripper{c}, nil
 }
