@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -112,20 +111,17 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 func (b *broker) getPayload(path string) (ClientRequest, error) {
 	encryptedPayload, err := amp.DecodePath(path)
 	if err != nil {
-		log.Println("ampClientOffers: error decoding path:", err)
-		return ClientRequest{}, err
+		return ClientRequest{}, fmt.Errorf("failed to decode amp path: %w", err)
 	}
 
 	encodedPayload, err := rsa.DecryptPKCS1v15(nil, b.privateKey, encryptedPayload)
 	if err != nil {
-		log.Println("could not decrypt payload:", err)
-		return ClientRequest{}, err
+		return ClientRequest{}, fmt.Errorf("faled to decrypt payload: %w", err)
 	}
 
 	var message ClientRequest
 	if err := json.Unmarshal(encodedPayload, &message); err != nil {
-		log.Println("ampClientOffers: error unmarshaling payload:", err)
-		return ClientRequest{}, err
+		return ClientRequest{}, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 	return message, nil
 }
