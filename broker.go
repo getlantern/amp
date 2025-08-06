@@ -26,6 +26,8 @@ type Broker interface {
 	Handle(http.ResponseWriter, *http.Request)
 }
 
+// NewBroker creates a new Broker instance with the specified client timeout,
+// private key for decrypting client requests, and an optional HTTP client.
 func NewBroker(clientTimeout time.Duration, privateKey *rsa.PrivateKey, client *http.Client) Broker {
 	if client == nil {
 		client = &http.Client{
@@ -40,6 +42,7 @@ func NewBroker(clientTimeout time.Duration, privateKey *rsa.PrivateKey, client *
 	}
 }
 
+// Handle processes incoming HTTP requests for the AMP client offers.
 func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), b.requestTimeout*time.Second)
 	defer cancel()
