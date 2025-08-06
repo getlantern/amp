@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -114,7 +115,7 @@ func (b *broker) getPayload(path string) (ClientRequest, error) {
 		return ClientRequest{}, fmt.Errorf("failed to decode amp path: %w", err)
 	}
 
-	encodedPayload, err := rsa.DecryptPKCS1v15(nil, b.privateKey, encryptedPayload)
+	encodedPayload, err := rsa.DecryptOAEP(sha256.New(), nil, b.privateKey, encryptedPayload, nil)
 	if err != nil {
 		return ClientRequest{}, fmt.Errorf("faled to decrypt payload: %w", err)
 	}

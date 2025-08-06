@@ -5,6 +5,7 @@ import (
 	"bytes"
 	crand "crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -214,7 +215,7 @@ func decodeResponse(encodedResponse []byte) (*http.Response, error) {
 }
 
 func (c *client) encryptWithRSAPublicKey(data []byte) ([]byte, error) {
-	return rsa.EncryptPKCS1v15(crand.Reader, c.publicKey, data)
+	return rsa.EncryptOAEP(sha256.New(), crand.Reader, c.publicKey, data, nil)
 }
 
 // RoundTripper returns an http.RoundTripper that can be used to send HTTP requests
