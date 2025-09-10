@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/amp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type broker struct {
@@ -71,6 +73,10 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	trace.SpanFromContext(ctx).AddEvent("decoded_amp_request", trace.WithAttributes(
+		attribute.String("method", ampRequest.ClientRequest.Method),
+		attribute.String("url", ampRequest.ClientRequest.URL),
+	))
 	req, err := http.NewRequestWithContext(ctx, ampRequest.ClientRequest.Method, ampRequest.ClientRequest.URL, bytes.NewReader(ampRequest.ClientRequest.Body))
 	if err != nil {
 		slog.ErrorContext(ctx, "error creating request", slog.Any("error", err))
