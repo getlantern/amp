@@ -6,7 +6,10 @@ import (
 	crand "crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +22,7 @@ import (
 )
 
 type Client interface {
-	Exchange([]byte) ([]byte, error)
+	Exchange([]byte) (io.ReadCloser, error)
 	RoundTripper() (http.RoundTripper, error)
 }
 
@@ -28,31 +31,31 @@ type client struct {
 	cacheURL         *url.URL
 	fronts           []string
 	transport        http.RoundTripper
-	maxNumberOfBytes int64
-	publicKey        *rsa.PublicKey
+	clientPrivateKey *rsa.PrivateKey
+	serverPublicKey  *rsa.PublicKey
 }
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")
 
 // NewClient creates a new AMP client that can communicate with an AMP broker.
-// If the maxNumberOfBytes is set to 0, it defaults to 100000 bytes.
-func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.RoundTripper, maxNumberOfBytes int64, publicKey *rsa.PublicKey) Client {
-	//Maximum number of bytes to be read from an HTTP response
-	if maxNumberOfBytes == 0 {
-		maxNumberOfBytes = 100000
+func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.RoundTripper, serverPublicKey *rsa.PublicKey) (Client, error) {
+	privateKey, err := rsa.GenerateKey(crand.Reader, 4096)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate client private key: %w", err)
 	}
+
 	return &client{
 		brokerURL:        brokerURL,
 		cacheURL:         cacheURL,
 		fronts:           fronts,
 		transport:        transport,
-		maxNumberOfBytes: maxNumberOfBytes,
-		publicKey:        publicKey,
-	}
+		serverPublicKey:  serverPublicKey,
+		clientPrivateKey: privateKey,
+	}, nil
 }
 
 // Exchange sends an encoded payload to the AMP broker and returns the response.
-func (c *client) Exchange(encodedPayload []byte) ([]byte, error) {
+func (c *client) Exchange(encodedPayload []byte) (io.ReadCloser, error) {
 	// We cannot POST a body through an AMP cache, so instead we GET and
 	// encode the client poll request message into the URL.
 	reqURL := c.brokerURL.ResolveReference(&url.URL{
@@ -84,9 +87,8 @@ func (c *client) Exchange(encodedPayload []byte) ([]byte, error) {
 
 	resp, err := c.transport.RoundTrip(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to roundtrip: %w", err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		// A non-200 status indicates an error:
@@ -95,6 +97,7 @@ func (c *client) Exchange(encodedPayload []byte) ([]byte, error) {
 		// * If the broker returns a 5xx status, the AMP cache
 		//   translates it to a 404.
 		// https://amp.dev/documentation/guides-and-tutorials/learn/amp-caches-and-cors/amp-cache-urls/#redirect-%26-error-handling
+		slog.Warn("received unexpected status code", slog.Int("status_code", resp.StatusCode))
 		return nil, errUnexpectedBrokerError
 	}
 	if _, err := resp.Location(); err == nil {
@@ -105,24 +108,24 @@ func (c *client) Exchange(encodedPayload []byte) ([]byte, error) {
 		// follow redirects nor execute JavaScript, but in any case we
 		// cannot extract information from this response and can only
 		// treat it as an error.
+		slog.Warn("location header set, returning unexpected broker error")
 		return nil, errUnexpectedBrokerError
 	}
 
-	lr := io.LimitReader(resp.Body, c.maxNumberOfBytes+1)
-	dec, err := amp.NewArmorDecoder(lr)
+	dec, err := amp.NewArmorDecoder(resp.Body)
 	if err != nil {
-		return nil, err
-	}
-	response, err := io.ReadAll(dec)
-	if err != nil {
-		return nil, err
-	}
-	if lr.(*io.LimitedReader).N == 0 {
-		// We hit readLimit while decoding AMP armor, that's an error.
-		return nil, io.ErrUnexpectedEOF
+		return nil, fmt.Errorf("failed to create amp decoder: %w", err)
 	}
 
-	return response, err
+	// The caller should read from the decoder (which reads from the
+	// response body), but close the actual response body when done.
+	return &struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: dec,
+		Closer: resp.Body,
+	}, nil
 }
 
 type roundTripper struct {
@@ -140,6 +143,13 @@ type ClientRequest struct {
 	Headers http.Header `json:"headers"`
 }
 
+type AMPRequest struct {
+	ClientRequestEncoded string         `json:"client_request"`
+	ClientRequest        ClientRequest  `json:"-"`
+	PublicKeyPEM         string         `json:"public_key"`
+	PublicKey            *rsa.PublicKey `json:"-"`
+}
+
 // BrokerResponse is a struct that represents an HTTP response.
 type BrokerResponse struct {
 	StatusCode    int         `json:"status_code"`
@@ -153,29 +163,55 @@ type BrokerResponse struct {
 // It encodes the HTTP request, encrypts it with the RSA public key,
 // sends it to the AMP broker, and decodes the response back into an HTTP response.
 func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	payload, err := encodeRequest(req)
+	clientPayload, err := r.encodeClientRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't encode request: %w", err)
+	}
+	encryptedPayload, err := r.encryptWithRSAPublicKey(clientPayload)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't encrypt request: %w", err)
 	}
 
-	encryptedPayload, err := r.encryptWithRSAPublicKey(payload)
+	publicKeyPEM, err := publicKeyToPEM(&r.clientPrivateKey.PublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't encrypt request: %w", err)
+		return nil, fmt.Errorf("couldn't encode public key: %w", err)
 	}
 
-	response, err := r.Exchange(encryptedPayload)
+	encodedPayload, err := json.Marshal(AMPRequest{
+		ClientRequestEncoded: base64.StdEncoding.EncodeToString(encryptedPayload),
+		PublicKeyPEM:         string(publicKeyPEM),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("couldn't marshal AMP request: %w", err)
+	}
+
+	response, err := r.Exchange(encodedPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to exchange: %w", err)
+	}
+	defer response.Close()
+
+	return r.decodeResponse(response)
+}
+
+func publicKeyToPEM(publicKey *rsa.PublicKey) ([]byte, error) {
+	pubASN1, err := x509.MarshalPKIXPublicKey(publicKey)
 	if err != nil {
 		return nil, err
 	}
-
-	return decodeResponse(response)
+	pubPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubASN1,
+	})
+	return pubPEM, nil
 }
 
-func encodeRequest(req *http.Request) ([]byte, error) {
-	var message ClientRequest
-	message.Method = req.Method
-	message.Headers = req.Header
-	message.Host = req.Host
+func (r *roundTripper) encodeClientRequest(req *http.Request) ([]byte, error) {
+	message := ClientRequest{
+		Method:  req.Method,
+		Headers: req.Header,
+		Host:    req.Host,
+	}
 	if req.URL != nil {
 		message.Host = req.URL.Host
 		message.URL = req.URL.String()
@@ -197,9 +233,20 @@ func encodeRequest(req *http.Request) ([]byte, error) {
 	return payload, nil
 }
 
-func decodeResponse(encodedResponse []byte) (*http.Response, error) {
+func (r *roundTripper) decodeResponse(rc io.ReadCloser) (*http.Response, error) {
+	encodedResponse, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decrypt the response with the client's private key
+	rsaDecryptedResponse, err := rsa.DecryptOAEP(sha256.New(), crand.Reader, r.clientPrivateKey, encodedResponse, nil)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't decrypt response: %w", err)
+	}
+
 	var response BrokerResponse
-	if err := json.Unmarshal(encodedResponse, &response); err != nil {
+	if err := json.Unmarshal(rsaDecryptedResponse, &response); err != nil {
 		return nil, fmt.Errorf("couldn't unmarshal response: %w", err)
 	}
 
@@ -215,7 +262,7 @@ func decodeResponse(encodedResponse []byte) (*http.Response, error) {
 }
 
 func (c *client) encryptWithRSAPublicKey(data []byte) ([]byte, error) {
-	return rsa.EncryptOAEP(sha256.New(), crand.Reader, c.publicKey, data, nil)
+	return rsa.EncryptOAEP(sha256.New(), crand.Reader, c.serverPublicKey, data, nil)
 }
 
 // RoundTripper returns an http.RoundTripper that can be used to send HTTP requests

@@ -50,7 +50,8 @@ func TestBroker_Handle_Integration(t *testing.T) {
 	brokerURL, err := url.Parse(brokerSrv.URL)
 	require.NoError(t, err)
 
-	client := NewClient(brokerURL, nil, nil, http.DefaultTransport, 100000, pub)
+	client, err := NewClient(brokerURL, nil, nil, http.DefaultTransport, pub)
+	require.NoError(t, err)
 
 	type testCase struct {
 		name            string

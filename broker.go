@@ -3,9 +3,14 @@ package amp
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -59,41 +64,33 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientRequest, err := b.getPayload(path)
+	ampRequest, err := b.getPayload(path)
 	if err != nil {
 		slog.WarnContext(ctx, "failed to read payload", slog.Any("error", err), slog.String("path", path))
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, clientRequest.Method, clientRequest.URL, bytes.NewReader(clientRequest.Body))
+	req, err := http.NewRequestWithContext(ctx, ampRequest.ClientRequest.Method, ampRequest.ClientRequest.URL, bytes.NewReader(ampRequest.ClientRequest.Body))
 	if err != nil {
 		slog.ErrorContext(ctx, "error creating request", slog.Any("error", err))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	req.Header = clientRequest.Headers
+	req.Header = ampRequest.ClientRequest.Headers
 	serverResponse, err := b.client.Do(req)
 	if err != nil {
-		slog.ErrorContext(ctx, "error making request to server", slog.Any("error", err), slog.String("url", clientRequest.URL))
+		slog.ErrorContext(ctx, "error making request to server", slog.Any("error", err), slog.String("url", ampRequest.ClientRequest.URL))
 		w.WriteHeader(http.StatusBadGateway)
 		return
 	}
 
-	encodedResponse, err := encodeResponse(serverResponse)
+	encodedResponse, err := encodeResponse(ampRequest.PublicKey, serverResponse)
 	if err != nil {
 		slog.ErrorContext(ctx, "error encoding response", slog.Any("error", err))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
-	w.Header().Set("Content-Type", "text/html")
-	// Attempt to hint to an AMP cache not to waste resources caching this
-	// document. "The Google AMP Cache considers any document fresh for at
-	// least 15 seconds."
-	// https://developers.google.com/amp/cache/overview#google-amp-cache-updates
-	w.Header().Set("Cache-Control", "max-age=15")
-	w.WriteHeader(http.StatusOK)
 
 	enc, err := amp.NewArmorEncoder(w)
 	if err != nil {
@@ -107,27 +104,65 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(ctx, "failed to write encoded response", slog.Any("error", err))
 		return
 	}
+
+	w.Header().Set("Content-Type", "text/html")
+	// Attempt to hint to an AMP cache not to waste resources caching this
+	// document. "The Google AMP Cache considers any document fresh for at
+	// least 15 seconds."
+	// https://developers.google.com/amp/cache/overview#google-amp-cache-updates
+	w.Header().Set("Cache-Control", "max-age=15")
+	w.WriteHeader(http.StatusOK)
 }
 
-func (b *broker) getPayload(path string) (ClientRequest, error) {
-	encryptedPayload, err := amp.DecodePath(path)
+func (b *broker) getPayload(path string) (AMPRequest, error) {
+	ampRequestPayload, err := amp.DecodePath(path)
 	if err != nil {
-		return ClientRequest{}, fmt.Errorf("failed to decode amp path: %w", err)
+		return AMPRequest{}, fmt.Errorf("failed to decode amp path: %w", err)
 	}
 
-	encodedPayload, err := rsa.DecryptOAEP(sha256.New(), nil, b.privateKey, encryptedPayload, nil)
+	var ampRequest AMPRequest
+	if err := json.Unmarshal(ampRequestPayload, &ampRequest); err != nil {
+		return AMPRequest{}, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+	ampRequest.PublicKey, err = pemToPublicKey(ampRequest.PublicKeyPEM)
 	if err != nil {
-		return ClientRequest{}, fmt.Errorf("faled to decrypt payload: %w", err)
+		return AMPRequest{}, fmt.Errorf("failed to parse client public key: %w", err)
 	}
 
-	var message ClientRequest
-	if err := json.Unmarshal(encodedPayload, &message); err != nil {
-		return ClientRequest{}, fmt.Errorf("failed to unmarshal payload: %w", err)
+	encryptedClientRequest, err := base64.StdEncoding.DecodeString(ampRequest.ClientRequestEncoded)
+	if err != nil {
+		return AMPRequest{}, err
 	}
-	return message, nil
+
+	jsonClientRequest, err := rsa.DecryptOAEP(sha256.New(), nil, b.privateKey, encryptedClientRequest, nil)
+	if err != nil {
+		return AMPRequest{}, fmt.Errorf("faled to decrypt payload: %w", err)
+	}
+	if err := json.Unmarshal(jsonClientRequest, &ampRequest.ClientRequest); err != nil {
+		return AMPRequest{}, err
+	}
+
+	return ampRequest, nil
 }
 
-func encodeResponse(serverResponse *http.Response) ([]byte, error) {
+func pemToPublicKey(pemStr string) (*rsa.PublicKey, error) {
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil || block.Type != "PUBLIC KEY" {
+		return nil, errors.New("failed to decode PEM block containing public key")
+	}
+
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("not an RSA public key")
+	}
+	return rsaPub, nil
+}
+
+func encodeResponse(clientPublicKey *rsa.PublicKey, serverResponse *http.Response) ([]byte, error) {
 	var response BrokerResponse
 	response.StatusCode = serverResponse.StatusCode
 	response.StatusText = serverResponse.Status
@@ -143,9 +178,14 @@ func encodeResponse(serverResponse *http.Response) ([]byte, error) {
 		}
 	}
 
-	encodedResponse, err := json.Marshal(&response)
+	jsonResponse, err := json.Marshal(&response)
 	if err != nil {
 		return nil, fmt.Errorf("could not marshal response: %w", err)
 	}
-	return encodedResponse, nil
+
+	encryptedResponse, err := rsa.EncryptOAEP(sha256.New(), crand.Reader, clientPublicKey, jsonResponse, nil)
+	if err != nil {
+		return nil, fmt.Errorf("could not encrypt response: %w", err)
+	}
+	return encryptedResponse, nil
 }
