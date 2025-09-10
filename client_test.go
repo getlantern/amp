@@ -74,18 +74,19 @@ func TestClient_Exchange(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			c := &client{
-				brokerURL:        brokerURL,
-				transport:        tt.transport,
-				maxNumberOfBytes: 100000,
+				brokerURL: brokerURL,
+				transport: tt.transport,
 			}
 			got, err := c.Exchange(tt.payload)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.want, got)
+				response, err := io.ReadAll(got)
+				require.NoError(t, err)
+				got.Close()
+				assert.Equal(t, tt.want, response)
 			}
 		})
 	}
@@ -93,8 +94,9 @@ func TestClient_Exchange(t *testing.T) {
 
 func TestNewClientDefaults(t *testing.T) {
 	brokerURL, _ := url.Parse("https://broker.example")
-	client := NewClient(brokerURL, nil, nil, http.DefaultTransport, 0, &rsa.PublicKey{}).(*client)
-	assert.Equal(t, int64(100000), client.maxNumberOfBytes)
+	cli, err := NewClient(brokerURL, nil, nil, http.DefaultTransport, &rsa.PublicKey{})
+	require.NoError(t, err)
+	require.NotNil(t, cli)
 }
 
 // encodeBrokerResponse encodes a BrokerResponse as JSON for the test.
@@ -116,14 +118,23 @@ func generateTestKey(t *testing.T) *rsa.PublicKey {
 func TestRoundTripper_RoundTrip(t *testing.T) {
 	brokerURL, err := url.Parse("https://broker.example")
 	require.NoError(t, err)
-	successfulResponse := encodeBrokerResponse(t, BrokerResponse{
-		StatusCode: http.StatusOK,
-		StatusText: http.StatusText(http.StatusOK),
-		Headers:    http.Header{"X-Test": []string{"foo"}},
-		Body:       []byte("hello"),
-	})
 	defaultRequest, err := http.NewRequest("GET", "https://broker.example", http.NoBody)
 	require.NoError(t, err)
+
+	c, err := NewClient(brokerURL, nil, nil, http.DefaultTransport, generateTestKey(t))
+	require.NoError(t, err)
+
+	clientPublicKey := c.(*client).clientPrivateKey.PublicKey
+
+	encodedSuccessfulResponse, err := encodeResponse(&clientPublicKey, &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     http.StatusText(http.StatusOK),
+		Header:     http.Header{"X-Test": []string{"foo"}},
+		Body:       io.NopCloser(bytes.NewBufferString("hello")),
+	})
+	require.NoError(t, err)
+	successfulResponse := armorData(t, encodedSuccessfulResponse)
+
 	tests := []struct {
 		name      string
 		transport http.RoundTripper
@@ -173,7 +184,7 @@ func TestRoundTripper_RoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewClient(brokerURL, nil, nil, tt.transport, 0, generateTestKey(t))
+			c.(*client).transport = tt.transport
 			rt, err := c.RoundTripper()
 			require.NoError(t, err)
 			resp, err := rt.RoundTrip(tt.request)
