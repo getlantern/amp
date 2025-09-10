@@ -136,7 +136,7 @@ func (b *broker) getPayload(path string) (AMPRequest, error) {
 
 	jsonClientRequest, err := rsa.DecryptOAEP(sha256.New(), nil, b.privateKey, encryptedClientRequest, nil)
 	if err != nil {
-		return AMPRequest{}, fmt.Errorf("faled to decrypt payload: %w", err)
+		return AMPRequest{}, fmt.Errorf("failed to decrypt payload: %w", err)
 	}
 	if err := json.Unmarshal(jsonClientRequest, &ampRequest.ClientRequest); err != nil {
 		return AMPRequest{}, err
