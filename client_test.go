@@ -1,14 +1,17 @@
 package amp
 
 import (
+	"bufio"
 	"bytes"
 	crand "crypto/rand"
 	"crypto/rsa"
-	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,6 +21,7 @@ import (
 
 // mockTransport implements http.RoundTripper for testing.
 type mockTransport struct {
+	f    func()
 	resp *http.Response
 	err  error
 }
@@ -94,25 +98,17 @@ func TestClient_Exchange(t *testing.T) {
 
 func TestNewClientDefaults(t *testing.T) {
 	brokerURL, _ := url.Parse("https://broker.example")
-	cli, err := NewClient(brokerURL, nil, nil, http.DefaultTransport, &rsa.PublicKey{})
+	cli, err := NewClient(brokerURL, nil, nil, http.DefaultTransport, &rsa.PublicKey{}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cli)
 }
 
-// encodeBrokerResponse encodes a BrokerResponse as JSON for the test.
-func encodeBrokerResponse(t *testing.T, br BrokerResponse) []byte {
-	t.Helper()
-	b, err := json.Marshal(br)
-	require.NoError(t, err)
-	return armorData(t, b)
-}
-
-func generateTestKey(t *testing.T) *rsa.PublicKey {
+func generateTestKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
 	// Generate a test RSA public key.
 	priv, err := rsa.GenerateKey(crand.Reader, 2048)
 	require.NoError(t, err)
-	return &priv.PublicKey
+	return priv
 }
 
 func TestRoundTripper_RoundTrip(t *testing.T) {
@@ -121,59 +117,89 @@ func TestRoundTripper_RoundTrip(t *testing.T) {
 	defaultRequest, err := http.NewRequest("GET", "https://broker.example", http.NoBody)
 	require.NoError(t, err)
 
-	c, err := NewClient(brokerURL, nil, nil, http.DefaultTransport, generateTestKey(t))
-	require.NoError(t, err)
-
-	clientPublicKey := c.(*client).clientPrivateKey.PublicKey
-
-	encodedSuccessfulResponse, err := encodeResponse(&clientPublicKey, &http.Response{
-		StatusCode: http.StatusOK,
-		Status:     http.StatusText(http.StatusOK),
-		Header:     http.Header{"X-Test": []string{"foo"}},
-		Body:       io.NopCloser(bytes.NewBufferString("hello")),
-	})
-	require.NoError(t, err)
-	successfulResponse := armorData(t, encodedSuccessfulResponse)
+	privateKey := generateTestKey(t)
+	successfulMessage := "successful response"
 
 	tests := []struct {
-		name      string
-		transport http.RoundTripper
-		request   *http.Request
-		want      []byte
-		wantErr   bool
-		errMsg    string
+		name    string
+		request *http.Request
+		dial    func(network, address string) (net.Conn, error)
+		want    []byte
+		wantErr bool
+		errMsg  string
 	}{
 		{
-			name: "success",
-			transport: &mockTransport{
-				resp: &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader(successfulResponse)),
-					Header:     make(http.Header),
-				},
+			name: "roundtrip and return a success response",
+			dial: func(network, address string) (net.Conn, error) {
+				reader, writer := io.Pipe()
+				successfulResponse := new(bytes.Buffer)
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					r, err := http.ReadRequest(bufio.NewReader(reader))
+					require.NoError(t, err)
+					assert.Equal(t, "GET", r.Method)
+
+					path := strings.TrimPrefix(r.URL.Path, "/amp/client/")
+					ampRequest, err := getPayload(path, privateKey)
+					require.NoError(t, err)
+					req, err := http.NewRequest(ampRequest.ClientRequest.Method, ampRequest.ClientRequest.URL, bytes.NewReader(ampRequest.ClientRequest.Body))
+					require.NoError(t, err)
+
+					encodedProxiedResponse, err := encodeResponse(ampRequest, &http.Response{
+						Request:    req,
+						Proto:      "HTTP/1.1",
+						Status:     "OK",
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(bytes.NewBufferString(successfulMessage)),
+					})
+					require.NoError(t, err)
+
+					armoredResponse := new(bytes.Buffer)
+					encoder, err := amp.NewArmorEncoder(armoredResponse)
+					require.NoError(t, err)
+					_, err = encoder.Write(encodedProxiedResponse)
+					require.NoError(t, err)
+					require.NoError(t, encoder.Close())
+
+					responseHeaders := make(http.Header)
+					responseHeaders.Set("Content-Type", "text/html")
+					responseHeaders.Set("Cache-Control", "max-age=15")
+
+					httpResponse := &http.Response{
+						Proto:      "HTTP/1.1",
+						Status:     "OK",
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(armoredResponse),
+						Header:     responseHeaders,
+					}
+					require.NoError(t, httpResponse.Write(successfulResponse))
+				}()
+				return &mockConn{
+					reader: successfulResponse,
+					writer: writer,
+					wg:     &wg,
+				}, nil
 			},
 			request: defaultRequest,
-			want:    []byte("hello"),
+			want:    []byte(successfulMessage),
 			wantErr: false,
 		},
 		{
-			name: "transport error",
-			transport: &mockTransport{
-				err: errors.New("fail"),
-			},
-			request: defaultRequest,
-			want:    nil,
-			wantErr: true,
-			errMsg:  "fail",
-		},
-		{
 			name: "amp returns EOF when the response doesn't contain the expected AMP armor",
-			transport: &mockTransport{
-				resp: &http.Response{
+			dial: func(network, address string) (net.Conn, error) {
+				httpResponse := &http.Response{
 					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBufferString("not-json")),
-					Header:     make(http.Header),
-				},
+					Body:       io.NopCloser(bytes.NewReader([]byte("invalid response"))),
+				}
+				responseBuf := new(bytes.Buffer)
+				httpResponse.Write(responseBuf)
+
+				return &mockConn{
+					reader: responseBuf,
+					writer: new(bytes.Buffer),
+				}, nil
 			},
 			request: defaultRequest,
 			want:    nil,
@@ -184,7 +210,8 @@ func TestRoundTripper_RoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c.(*client).transport = tt.transport
+			c, err := NewClient(brokerURL, nil, nil, http.DefaultTransport, &privateKey.PublicKey, tt.dial)
+			require.NoError(t, err)
 			rt, err := c.RoundTripper()
 			require.NoError(t, err)
 			resp, err := rt.RoundTrip(tt.request)

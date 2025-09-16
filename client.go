@@ -2,19 +2,16 @@
 package amp
 
 import (
-	"bytes"
-	crand "crypto/rand"
+	"bufio"
+	"crypto/cipher"
 	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 
@@ -27,30 +24,33 @@ type Client interface {
 }
 
 type client struct {
-	brokerURL        *url.URL
-	cacheURL         *url.URL
-	fronts           []string
-	transport        http.RoundTripper
-	clientPrivateKey *rsa.PrivateKey
-	serverPublicKey  *rsa.PublicKey
+	brokerURL       *url.URL
+	cacheURL        *url.URL
+	fronts          []string
+	transport       http.RoundTripper
+	dial            dialFunc
+	serverPublicKey *rsa.PublicKey
 }
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")
 
 // NewClient creates a new AMP client that can communicate with an AMP broker.
-func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.RoundTripper, serverPublicKey *rsa.PublicKey) (Client, error) {
-	privateKey, err := rsa.GenerateKey(crand.Reader, 4096)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate client private key: %w", err)
+// If cacheURL is non-nil, the client will use the AMP cache at that URL.
+// If fronts is non-empty, the client will use domain fronting by randomly selecting one of the provided front domains.
+// transport is a optional parameter since it's only used by the Exchange method (for AMP cache support but be aware! Exchange func doesn't encrypt your data!).
+// The server public key must be provided for the RoundTripper method to work.
+// The dialer parameter is optional and can be nil, in which case the default net.Dialer will be used.
+func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.RoundTripper, serverPublicKey *rsa.PublicKey, dialer dialFunc) (Client, error) {
+	if dialer == nil {
+		dialer = (&net.Dialer{}).Dial
 	}
-
 	return &client{
-		brokerURL:        brokerURL,
-		cacheURL:         cacheURL,
-		fronts:           fronts,
-		transport:        transport,
-		serverPublicKey:  serverPublicKey,
-		clientPrivateKey: privateKey,
+		brokerURL:       brokerURL,
+		cacheURL:        cacheURL,
+		fronts:          fronts,
+		transport:       transport,
+		dial:            dialer,
+		serverPublicKey: serverPublicKey,
 	}, nil
 }
 
@@ -80,7 +80,7 @@ func (c *client) Exchange(encodedPayload []byte) (io.ReadCloser, error) {
 		// Do domain fronting. Replace the domain in the URL's with a randomly
 		// selected front, and store the original domain the HTTP Host header.
 		front := c.fronts[rand.Intn(len(c.fronts))]
-		slog.Debug("Selected front domain", slog.String("front", front))
+		slog.Info("Selected front domain", slog.String("front", front))
 		req.Host = req.URL.Host
 		req.URL.Host = front
 	}
@@ -144,14 +144,16 @@ type ClientRequest struct {
 }
 
 type AMPRequest struct {
-	ClientRequestEncoded string         `json:"client_request"`
-	ClientRequest        ClientRequest  `json:"-"`
-	PublicKeyPEM         string         `json:"public_key"`
-	PublicKey            *rsa.PublicKey `json:"-"`
+	ClientRequestEncoded string        `json:"p"`
+	Key                  string        `json:"k"`
+	Nonce                string        `json:"n"`
+	ClientRequest        ClientRequest `json:"-"`
+	key                  []byte        `json:"-"`
+	nonce                []byte        `json:"-"`
+	aead                 cipher.AEAD   `json:"-"`
 }
 
-// BrokerResponse is a struct that represents an HTTP response.
-type BrokerResponse struct {
+type HTTPResponse struct {
 	StatusCode    int         `json:"status_code"`
 	StatusText    string      `json:"status_text"`
 	ContentLength int64       `json:"content_length"`
@@ -159,51 +161,38 @@ type BrokerResponse struct {
 	Body          []byte      `json:"body"`
 }
 
+// BrokerResponse is a struct that represents an HTTP response.
+type BrokerResponse struct {
+	Response string `json:"response"`
+	Nonce    string `json:"nonce"`
+}
+
 // RoundTrip implements the http.RoundTripper interface for the AMP client.
-// It encodes the HTTP request, encrypts it with the RSA public key,
-// sends it to the AMP broker, and decodes the response back into an HTTP response.
+// It generate a symmetric key, encrypt the encoded request, encrypt the key
+// with the server public key, send it to the AMP broker and decode
+// the response back into an HTTP response.
 func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	clientPayload, err := r.encodeClientRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't encode request: %w", err)
 	}
-	encryptedPayload, err := r.encryptWithRSAPublicKey(clientPayload)
+	ampConn, err := NewAMPClientConn(r.brokerURL, r.cacheURL, r.fronts, r.dial)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't encrypt request: %w", err)
+		return nil, fmt.Errorf("failed to create AMP client conn: %w", err)
 	}
 
-	publicKeyPEM, err := publicKeyToPEM(&r.clientPrivateKey.PublicKey)
+	encryptedConn, err := NewCryptClientConn(ampConn, r.serverPublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't encode public key: %w", err)
+		return nil, fmt.Errorf("failed to create crypt conn: %w", err)
+	}
+	defer encryptedConn.Close()
+
+	_, err = encryptedConn.Write(clientPayload)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't write to crypt conn: %w", err)
 	}
 
-	encodedPayload, err := json.Marshal(AMPRequest{
-		ClientRequestEncoded: base64.StdEncoding.EncodeToString(encryptedPayload),
-		PublicKeyPEM:         string(publicKeyPEM),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("couldn't marshal AMP request: %w", err)
-	}
-
-	response, err := r.Exchange(encodedPayload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to exchange: %w", err)
-	}
-	defer response.Close()
-
-	return r.decodeResponse(response)
-}
-
-func publicKeyToPEM(publicKey *rsa.PublicKey) ([]byte, error) {
-	pubASN1, err := x509.MarshalPKIXPublicKey(publicKey)
-	if err != nil {
-		return nil, err
-	}
-	pubPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: pubASN1,
-	})
-	return pubPEM, nil
+	return http.ReadResponse(bufio.NewReader(encryptedConn), req)
 }
 
 func (r *roundTripper) encodeClientRequest(req *http.Request) ([]byte, error) {
@@ -233,39 +222,7 @@ func (r *roundTripper) encodeClientRequest(req *http.Request) ([]byte, error) {
 	return payload, nil
 }
 
-func (r *roundTripper) decodeResponse(rc io.ReadCloser) (*http.Response, error) {
-	encodedResponse, err := io.ReadAll(rc)
-	if err != nil {
-		return nil, err
-	}
-
-	// Decrypt the response with the client's private key
-	rsaDecryptedResponse, err := rsa.DecryptOAEP(sha256.New(), crand.Reader, r.clientPrivateKey, encodedResponse, nil)
-	if err != nil {
-		return nil, fmt.Errorf("couldn't decrypt response: %w", err)
-	}
-
-	var response BrokerResponse
-	if err := json.Unmarshal(rsaDecryptedResponse, &response); err != nil {
-		return nil, fmt.Errorf("couldn't unmarshal response: %w", err)
-	}
-
-	resp := &http.Response{
-		Status:        response.StatusText,
-		StatusCode:    response.StatusCode,
-		Header:        response.Headers,
-		ContentLength: int64(len(response.Body)),
-		Body:          io.NopCloser(bytes.NewBuffer(response.Body)),
-	}
-
-	return resp, nil
-}
-
-func (c *client) encryptWithRSAPublicKey(data []byte) ([]byte, error) {
-	return rsa.EncryptOAEP(sha256.New(), crand.Reader, c.serverPublicKey, data, nil)
-}
-
 // RoundTripper returns an http.RoundTripper that can be used to send HTTP requests
 func (c *client) RoundTripper() (http.RoundTripper, error) {
-	return &roundTripper{c}, nil
+	return &roundTripper{client: c}, nil
 }
