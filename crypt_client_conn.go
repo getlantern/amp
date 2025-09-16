@@ -103,6 +103,7 @@ func (c *cryptClientConn) Read(b []byte) (int, error) {
 		reader, writer := io.Pipe()
 		c.response = reader
 		go func() {
+			defer writer.Close()
 			if err := resp.Write(writer); err != nil {
 				slog.Error("couldn't write HTTP response to pipe", slog.Any("error", err))
 			}
