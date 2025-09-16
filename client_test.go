@@ -131,7 +131,6 @@ func TestRoundTripper_RoundTrip(t *testing.T) {
 		{
 			name: "roundtrip and return a success response",
 			dial: func(network, address string) (net.Conn, error) {
-				// I need to read tho data written on the writeBuf so I can extract the AES key and nonce
 				reader, writer := io.Pipe()
 				successfulResponse := new(bytes.Buffer)
 				var wg sync.WaitGroup
