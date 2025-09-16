@@ -3,14 +3,10 @@ package amp
 import (
 	"bytes"
 	"context"
-	crand "crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +17,7 @@ import (
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/amp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 type broker struct {
@@ -66,7 +63,7 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ampRequest, err := b.getPayload(path)
+	ampRequest, err := getPayload(path, b.privateKey)
 	if err != nil {
 		slog.WarnContext(ctx, "failed to read payload", slog.Any("error", err), slog.String("path", path))
 		w.WriteHeader(http.StatusBadRequest)
@@ -91,7 +88,7 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encodedResponse, err := encodeResponse(ampRequest.PublicKey, serverResponse)
+	encodedResponse, err := encodeResponse(ampRequest, serverResponse)
 	if err != nil {
 		slog.ErrorContext(ctx, "error encoding response", slog.Any("error", err))
 		w.WriteHeader(http.StatusInternalServerError)
@@ -120,56 +117,56 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (b *broker) getPayload(path string) (AMPRequest, error) {
+func getPayload(path string, privateKey *rsa.PrivateKey) (*AMPRequest, error) {
 	ampRequestPayload, err := amp.DecodePath(path)
 	if err != nil {
-		return AMPRequest{}, fmt.Errorf("failed to decode amp path: %w", err)
+		return nil, fmt.Errorf("failed to decode amp path: %w", err)
 	}
 
 	var ampRequest AMPRequest
 	if err := json.Unmarshal(ampRequestPayload, &ampRequest); err != nil {
-		return AMPRequest{}, fmt.Errorf("failed to unmarshal payload: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
-	ampRequest.PublicKey, err = pemToPublicKey(ampRequest.PublicKeyPEM)
+	encryptedKey, err := base64.StdEncoding.DecodeString(ampRequest.Key)
 	if err != nil {
-		return AMPRequest{}, fmt.Errorf("failed to parse client public key: %w", err)
+		return nil, fmt.Errorf("failed to parse client key: %w", err)
+	}
+
+	ampRequest.nonce, err = base64.StdEncoding.DecodeString(ampRequest.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse nonce: %w", err)
 	}
 
 	encryptedClientRequest, err := base64.StdEncoding.DecodeString(ampRequest.ClientRequestEncoded)
 	if err != nil {
-		return AMPRequest{}, err
-	}
-
-	jsonClientRequest, err := rsa.DecryptOAEP(sha256.New(), nil, b.privateKey, encryptedClientRequest, nil)
-	if err != nil {
-		return AMPRequest{}, fmt.Errorf("failed to decrypt payload: %w", err)
-	}
-	if err := json.Unmarshal(jsonClientRequest, &ampRequest.ClientRequest); err != nil {
-		return AMPRequest{}, err
-	}
-
-	return ampRequest, nil
-}
-
-func pemToPublicKey(pemStr string) (*rsa.PublicKey, error) {
-	block, _ := pem.Decode([]byte(pemStr))
-	if block == nil || block.Type != "PUBLIC KEY" {
-		return nil, errors.New("failed to decode PEM block containing public key")
-	}
-
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
 		return nil, err
 	}
-	rsaPub, ok := pub.(*rsa.PublicKey)
-	if !ok {
-		return nil, errors.New("not an RSA public key")
+
+	ampRequest.key, err = rsa.DecryptOAEP(sha256.New(), nil, privateKey, encryptedKey, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt payload: %w", err)
 	}
-	return rsaPub, nil
+
+	ampRequest.aead, err = chacha20poly1305.New(ampRequest.key)
+	if err != nil {
+		return nil, fmt.Errorf("could not create AEAD: %w", err)
+	}
+
+	jsonClientRequest, err := ampRequest.aead.Open(nil, ampRequest.nonce, encryptedClientRequest, nil)
+	if err != nil {
+		return nil, fmt.Errorf("could not decrypt client request: %w", err)
+	}
+	incrementNonce(ampRequest.nonce)
+
+	if err := json.Unmarshal(jsonClientRequest, &ampRequest.ClientRequest); err != nil {
+		return nil, err
+	}
+
+	return &ampRequest, nil
 }
 
-func encodeResponse(clientPublicKey *rsa.PublicKey, serverResponse *http.Response) ([]byte, error) {
-	var response BrokerResponse
+func encodeResponse(request *AMPRequest, serverResponse *http.Response) ([]byte, error) {
+	var response HTTPResponse
 	response.StatusCode = serverResponse.StatusCode
 	response.StatusText = serverResponse.Status
 	response.Headers = serverResponse.Header
@@ -189,9 +186,17 @@ func encodeResponse(clientPublicKey *rsa.PublicKey, serverResponse *http.Respons
 		return nil, fmt.Errorf("could not marshal response: %w", err)
 	}
 
-	encryptedResponse, err := rsa.EncryptOAEP(sha256.New(), crand.Reader, clientPublicKey, jsonResponse, nil)
-	if err != nil {
-		return nil, fmt.Errorf("could not encrypt response: %w", err)
+	incrementNonce(request.nonce)
+	encryptedResponse := request.aead.Seal(nil, request.nonce, jsonResponse, nil)
+	brokerResponse := BrokerResponse{
+		Response: base64.StdEncoding.EncodeToString(encryptedResponse),
+		Nonce:    base64.StdEncoding.EncodeToString(request.nonce),
 	}
-	return encryptedResponse, nil
+
+	encodedBrokerResponse, err := json.Marshal(brokerResponse)
+	if err != nil {
+		return nil, fmt.Errorf("could not marshal broker response: %w", err)
+	}
+
+	return encodedBrokerResponse, nil
 }
