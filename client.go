@@ -35,7 +35,6 @@ type client struct {
 var errUnexpectedBrokerError = errors.New("unexpected broker error")
 
 // NewClient creates a new AMP client that can communicate with an AMP broker.
-// The broker URL must contain the port!
 // If cacheURL is non-nil, the client will use the AMP cache at that URL.
 // If fronts is non-empty, the client will use domain fronting by randomly selecting one of the provided front domains.
 // transport is a optional parameter since it's only used by the Exchange method (for AMP cache support but be aware! Exchange func doesn't encrypt your data!).

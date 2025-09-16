@@ -112,7 +112,7 @@ func generateTestKey(t *testing.T) *rsa.PrivateKey {
 }
 
 func TestRoundTripper_RoundTrip(t *testing.T) {
-	brokerURL, err := url.Parse("https://broker.example:443")
+	brokerURL, err := url.Parse("https://broker.example")
 	require.NoError(t, err)
 	defaultRequest, err := http.NewRequest("GET", "https://broker.example", http.NoBody)
 	require.NoError(t, err)

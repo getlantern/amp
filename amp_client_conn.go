@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/amp"
 )
@@ -135,7 +136,12 @@ func (c *ampClientConn) Write(b []byte) (n int, err error) {
 	}
 
 	if c.Conn == nil {
-		conn, err := c.dial("tcp", req.URL.Host)
+		// check if req.URL.Host contains a port
+		address := req.URL.Host
+		if !strings.Contains(req.URL.Host, ":") {
+			address = net.JoinHostPort(req.URL.Host, "443")
+		}
+		conn, err := c.dial("tcp", address)
 		if err != nil {
 			return 0, fmt.Errorf("failed to dial host %s: %w", req.URL.Host, err)
 		}
