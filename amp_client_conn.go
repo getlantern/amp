@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/amp"
 )
@@ -126,31 +125,26 @@ func (c *ampClientConn) Write(b []byte) (n int, err error) {
 		// selected front, and store the original domain the HTTP Host header.
 		front := c.fronts[rand.Intn(len(c.fronts))]
 		slog.Info("Selected front domain", slog.String("front", front))
-		req.Host = req.URL.Host
-		req.URL.Host = front
-	}
-
-	buffer := new(bytes.Buffer)
-	if err := req.Write(buffer); err != nil {
-		return 0, fmt.Errorf("failed to write request on buffer: %w", err)
+		c.req.Host = req.URL.Host
+		c.req.URL.Host = front
 	}
 
 	if c.Conn == nil {
-		// check if req.URL.Host contains a port
-		address := req.URL.Host
-		if !strings.Contains(req.URL.Host, ":") {
-			address = net.JoinHostPort(req.URL.Host, "443")
-		}
-		conn, err := c.dial("tcp", address)
+		conn, err := c.dial("tcp", c.req.URL.Host)
 		if err != nil {
-			return 0, fmt.Errorf("failed to dial host %s: %w", req.URL.Host, err)
+			return 0, fmt.Errorf("failed to dial host %s: %w", c.req.URL.Host, err)
 		}
 		c.Conn = conn
 	}
 
+	buffer := bytes.NewBuffer(nil)
+	if err := c.req.Write(buffer); err != nil {
+		return 0, fmt.Errorf("failed to write request on buffer: %w", err)
+	}
+
 	n, err = c.Conn.Write(buffer.Bytes())
 	if err != nil {
-		return 0, fmt.Errorf("failed to write request to connection: %w", err)
+		return n, fmt.Errorf("failed to write request to connection: %w", err)
 	}
 
 	return n, nil
