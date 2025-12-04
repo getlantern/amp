@@ -214,5 +214,6 @@ func (c *client) onNewConfig(gzippedYML []byte) error {
 	c.brokerURL = brokerURL
 	c.cacheURL = cacheURL
 	c.serverPublicKey = publicKey
+	c.fronts = cfg.Fronts
 	return nil
 }
