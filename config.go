@@ -112,6 +112,7 @@ func WithConfigURL(configURL string) Option {
 	}
 }
 
+// WithDialer sets the network dialer function used for creating connections.
 func WithDialer(dial dialFunc) Option {
 	return func(c *client) error {
 		c.dial = dial
