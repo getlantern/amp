@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"time"
 
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/amp"
 )
@@ -30,6 +31,10 @@ type client struct {
 	transport       http.RoundTripper
 	dial            dialFunc
 	serverPublicKey *rsa.PublicKey
+
+	httpClient   *http.Client
+	configURL    string
+	pollInterval time.Duration
 }
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")
