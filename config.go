@@ -29,7 +29,7 @@ type Config struct {
 }
 
 // NewClientWithConfig builds a new amp client with the provided configuration.
-// It also support options for retrieving the latest configuration given a poll
+// It also supports options for retrieving the latest configuration given a poll
 // interval, http client and config url address.
 // In order to stop the go routine that fetches the latest configuration, use this
 // function with a context that can be canceled and call this function when the application
