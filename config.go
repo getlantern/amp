@@ -88,7 +88,7 @@ func parseRSAPublicKeyFromPEM(pemBytes []byte) (*rsa.PublicKey, error) {
 // Option is a function type used to configure the amp client instance.
 type Option func(*client) error
 
-// WithHTTPClient set the HTTP client used during the configuration
+// WithHTTPClient sets the HTTP client used during the configuration
 // synchronization.
 func WithHTTPClient(httpClient *http.Client) Option {
 	return func(c *client) error {
@@ -97,7 +97,7 @@ func WithHTTPClient(httpClient *http.Client) Option {
 	}
 }
 
-// WithPollInterval set the poll interval for fetching new configurations.
+// WithPollInterval sets the poll interval for fetching new configurations.
 // By default it's set as 12h
 func WithPollInterval(t time.Duration) Option {
 	return func(c *client) error {
