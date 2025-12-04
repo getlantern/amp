@@ -28,8 +28,8 @@ type Config struct {
 	PublicKey string   `yaml:"publicKey"`
 }
 
-// NewClientWithConfig build a new amp client with the provided configuration.
-// It also support options for retrieving the latest configuration given a poll
+// NewClientWithConfig builds a new amp client with the provided configuration.
+// It also supports options for retrieving the latest configuration given a poll
 // interval, http client and config url address.
 // In order to stop the go routine that fetches the latest configuration, use this
 // function with a context that can be canceled and call this function when the application
@@ -104,7 +104,7 @@ func WithPollInterval(t time.Duration) Option {
 	}
 }
 
-// WithConfigURL set the URL to retrieve the latest configuration
+// WithConfigURL sets the URL to retrieve the latest configuration
 func WithConfigURL(configURL string) Option {
 	return func(c *client) error {
 		c.configURL = configURL
@@ -112,6 +112,7 @@ func WithConfigURL(configURL string) Option {
 	}
 }
 
+// WithDialer sets the network dialer function used for creating connections.
 func WithDialer(dial dialFunc) Option {
 	return func(c *client) error {
 		c.dial = dial
