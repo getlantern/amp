@@ -58,7 +58,9 @@ func NewClientWithConfig(ctx context.Context, cfg Config, opts ...Option) (Clien
 		pollInterval:    12 * time.Hour,
 	}
 	for _, opt := range opts {
-		opt(cli)
+		if err := opt(cli); err != nil {
+			return nil, fmt.Errorf("failed to apply option: %w", err)
+		}
 	}
 
 	cli.keepCurrent(ctx)
