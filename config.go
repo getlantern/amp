@@ -28,7 +28,7 @@ type Config struct {
 	PublicKey string   `yaml:"publicKey"`
 }
 
-// NewClientWithConfig build a new amp client with the provided configuration.
+// NewClientWithConfig builds a new amp client with the provided configuration.
 // It also support options for retrieving the latest configuration given a poll
 // interval, http client and config url address.
 // In order to stop the go routine that fetches the latest configuration, use this
