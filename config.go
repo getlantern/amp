@@ -211,6 +211,8 @@ func (c *client) onNewConfig(gzippedYML []byte) error {
 		return fmt.Errorf("failed to parse public key: %w", err)
 	}
 
+	c.updateMutex.Lock()
+	defer c.updateMutex.Unlock()
 	c.brokerURL = brokerURL
 	c.cacheURL = cacheURL
 	c.serverPublicKey = publicKey

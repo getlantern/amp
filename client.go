@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/amp"
@@ -35,6 +36,7 @@ type client struct {
 	httpClient   *http.Client
 	configURL    string
 	pollInterval time.Duration
+	updateMutex  sync.RWMutex
 }
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")
@@ -61,6 +63,8 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 
 // Exchange sends an encoded payload to the AMP broker and returns the response.
 func (c *client) Exchange(encodedPayload []byte) (io.ReadCloser, error) {
+	c.updateMutex.RLock()
+	defer c.updateMutex.RUnlock()
 	// We cannot POST a body through an AMP cache, so instead we GET and
 	// encode the client poll request message into the URL.
 	reqURL := c.brokerURL.ResolveReference(&url.URL{
@@ -177,6 +181,8 @@ type BrokerResponse struct {
 // with the server public key, send it to the AMP broker and decode
 // the response back into an HTTP response.
 func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.updateMutex.RLock()
+	defer r.updateMutex.RUnlock()
 	clientPayload, err := r.encodeClientRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't encode request: %w", err)
