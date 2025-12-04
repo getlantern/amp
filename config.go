@@ -104,7 +104,7 @@ func WithPollInterval(t time.Duration) Option {
 	}
 }
 
-// WithConfigURL set the URL to retrieve the latest configuration
+// WithConfigURL sets the URL to retrieve the latest configuration
 func WithConfigURL(configURL string) Option {
 	return func(c *client) error {
 		c.configURL = configURL
