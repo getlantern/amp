@@ -32,27 +32,12 @@ type Config struct {
 // It also supports options for retrieving the latest configuration given a poll
 // interval, http client and config url address until context is canceled.
 func NewClientWithConfig(ctx context.Context, cfg Config, opts ...Option) (Client, error) {
-	brokerURL, err := url.Parse(cfg.BrokerURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse broker url: %w", err)
-	}
-
-	cacheURL, err := url.Parse(cfg.CacheURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse cache url: %w", err)
-	}
-
-	publicKey, err := parseRSAPublicKeyFromPEM([]byte(cfg.PublicKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse public key: %w", err)
-	}
 	cli := &client{
-		brokerURL:       brokerURL,
-		cacheURL:        cacheURL,
-		fronts:          cfg.Fronts,
-		dial:            (&net.Dialer{}).Dial,
-		serverPublicKey: publicKey,
-		pollInterval:    12 * time.Hour,
+		dial:         (&net.Dialer{}).Dial,
+		pollInterval: 12 * time.Hour,
+	}
+	if err := cli.parseConfig(cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 	for _, opt := range opts {
 		if err := opt(cli); err != nil {
@@ -189,12 +174,7 @@ func (c *client) keepCurrent(ctx context.Context) {
 	runner.Start(c.pollInterval)
 }
 
-func (c *client) onNewConfig(gzippedYML []byte) error {
-	cfg, err := processYaml(gzippedYML)
-	if err != nil {
-		return fmt.Errorf("failed to process amp config: %w", err)
-	}
-
+func (c *client) parseConfig(cfg Config) error {
 	brokerURL, err := url.Parse(cfg.BrokerURL)
 	if err != nil {
 		return fmt.Errorf("failed to parse broker url: %w", err)
@@ -209,7 +189,6 @@ func (c *client) onNewConfig(gzippedYML []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse public key: %w", err)
 	}
-
 	c.updateMutex.Lock()
 	defer c.updateMutex.Unlock()
 	c.brokerURL = brokerURL
@@ -217,4 +196,13 @@ func (c *client) onNewConfig(gzippedYML []byte) error {
 	c.serverPublicKey = publicKey
 	c.fronts = cfg.Fronts
 	return nil
+}
+
+func (c *client) onNewConfig(gzippedYML []byte) error {
+	cfg, err := processYaml(gzippedYML)
+	if err != nil {
+		return fmt.Errorf("failed to process amp config: %w", err)
+	}
+
+	return c.parseConfig(cfg)
 }
