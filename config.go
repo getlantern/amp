@@ -30,10 +30,7 @@ type Config struct {
 
 // NewClientWithConfig builds a new amp client with the provided configuration.
 // It also supports options for retrieving the latest configuration given a poll
-// interval, http client and config url address.
-// In order to stop the go routine that fetches the latest configuration, use this
-// function with a context that can be canceled and call this function when the application
-// finishes.
+// interval, http client and config url address until context is canceled.
 func NewClientWithConfig(ctx context.Context, cfg Config, opts ...Option) (Client, error) {
 	brokerURL, err := url.Parse(cfg.BrokerURL)
 	if err != nil {
