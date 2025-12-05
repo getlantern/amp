@@ -141,13 +141,11 @@ func processYaml(gzippedYaml []byte) (Config, error) {
 	return cfg, nil
 }
 
-func configValidator() func([]byte) error {
-	return func(data []byte) error {
-		if _, err := processYaml(data); err != nil {
-			return err
-		}
-		return nil
+func configValidator(data []byte) error {
+	if _, err := processYaml(data); err != nil {
+		return err
 	}
+	return nil
 }
 
 func (c *client) keepCurrent(ctx context.Context) {
@@ -165,7 +163,7 @@ func (c *client) keepCurrent(ctx context.Context) {
 	dest := keepcurrent.ToChannel(chDB)
 
 	runner := keepcurrent.NewWithValidator(
-		configValidator(),
+		configValidator,
 		source,
 		dest,
 	)
