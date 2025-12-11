@@ -214,7 +214,7 @@ func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("couldn't encode request: %w", err)
 	}
-	ampConn, err := NewAMPClientConn(r.conn, r.brokerURL, r.cacheURL, r.dial)
+	ampConn, err := NewAMPClientConn(r.conn, r.brokerURL, r.cacheURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AMP client conn: %w", err)
 	}
