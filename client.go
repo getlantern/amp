@@ -33,11 +33,12 @@ type client struct {
 	dial            dialFunc
 	serverPublicKey *rsa.PublicKey
 
-	httpClient   *http.Client
-	configURL    string
-	pollInterval time.Duration
-	updateMutex  sync.RWMutex
-	conn         net.Conn
+	httpClient    *http.Client
+	configURL     string
+	pollInterval  time.Duration
+	updateMutex   sync.RWMutex
+	conn          net.Conn
+	selectedFront string
 }
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")
@@ -52,7 +53,7 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 	if dialer == nil {
 		dialer = (&net.Dialer{}).Dial
 	}
-	conn, err := establishConn(dialer, fronts)
+	conn, selectedFront, err := establishConn(dialer, fronts)
 	if err != nil {
 		return nil, err
 	}
@@ -65,14 +66,12 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 		dial:            dialer,
 		serverPublicKey: serverPublicKey,
 		conn:            conn,
+		selectedFront:   selectedFront,
 	}, nil
 }
 
-func establishConn(dialer dialFunc, fronts []string) (net.Conn, error) {
+func establishConn(dialer dialFunc, fronts []string) (net.Conn, string, error) {
 	var conn net.Conn
-	if len(fronts) == 0 {
-		return nil, nil
-	}
 	for _, front := range fronts {
 		var err error
 		conn, err = dialer("tcp", front)
@@ -80,12 +79,9 @@ func establishConn(dialer dialFunc, fronts []string) (net.Conn, error) {
 			slog.Warn("failed to dial to front host", slog.String("front", front), slog.Any("error", err))
 			continue
 		}
-		break
+		return conn, front, nil
 	}
-	if conn == nil {
-		return nil, fmt.Errorf("couldn't establish connection")
-	}
-	return conn, nil
+	return nil, "", fmt.Errorf("couldn't establish connection")
 }
 
 // Exchange sends an encoded payload to the AMP broker and returns the response.
@@ -214,7 +210,7 @@ func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("couldn't encode request: %w", err)
 	}
-	ampConn, err := NewAMPClientConn(r.conn, r.brokerURL, r.cacheURL)
+	ampConn, err := NewAMPClientConn(r.conn, r.brokerURL, r.cacheURL, r.selectedFront)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AMP client conn: %w", err)
 	}

@@ -18,21 +18,22 @@ type ampClientConn struct {
 	net.Conn
 	brokerURL      *url.URL
 	cacheURL       *url.URL
-	fronts         []string
 	req            *http.Request
 	decoder        io.Reader
 	responseCloser io.Closer
+	front          string
 }
 
 type dialFunc func(network, address string) (net.Conn, error)
 
 // NewAMPClientConn creates a new AMP client connection that implements net.Conn.
 // This connection is not encrypted!
-func NewAMPClientConn(conn net.Conn, brokerURL, cacheURL *url.URL) (net.Conn, error) {
+func NewAMPClientConn(conn net.Conn, brokerURL, cacheURL *url.URL, front string) (net.Conn, error) {
 	return &ampClientConn{
 		brokerURL: brokerURL,
 		cacheURL:  cacheURL,
 		Conn:      conn,
+		front:     front,
 	}, nil
 }
 
@@ -115,6 +116,11 @@ func (c *ampClientConn) Write(b []byte) (n int, err error) {
 		return 0, fmt.Errorf("failed to create new HTTP request: %w", err)
 	}
 	c.req = req
+
+	if c.front != "" {
+		c.req.Host = req.URL.Host
+		c.req.URL.Host = c.front
+	}
 
 	if c.Conn == nil {
 		return 0, fmt.Errorf("connection not established")

@@ -83,7 +83,6 @@ func TestAMPClientConn_ReadWrite(t *testing.T) {
 			c := &ampClientConn{
 				brokerURL: brokerURL,
 				cacheURL:  cacheURL,
-				fronts:    tt.fronts,
 				Conn:      conn,
 			}
 			// Write

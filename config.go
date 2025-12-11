@@ -45,11 +45,12 @@ func NewClientWithConfig(ctx context.Context, cfg Config, opts ...Option) (Clien
 		}
 	}
 
-	conn, err := establishConn(cli.dial, cfg.Fronts)
+	conn, selectedFront, err := establishConn(cli.dial, cfg.Fronts)
 	if err != nil {
 		return nil, err
 	}
 	cli.conn = conn
+	cli.selectedFront = selectedFront
 
 	cli.keepCurrent(ctx)
 	return cli, nil
