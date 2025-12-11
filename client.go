@@ -198,8 +198,6 @@ type BrokerResponse struct {
 // with the server public key, send it to the AMP broker and decode
 // the response back into an HTTP response.
 func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	r.updateMutex.Lock()
-	defer r.updateMutex.Unlock()
 	clientPayload, err := r.encodeClientRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't encode request: %w", err)
@@ -260,7 +258,6 @@ func (c *client) RoundTripper() (http.RoundTripper, error) {
 			brokerURL:       c.brokerURL,
 			cacheURL:        c.cacheURL,
 			fronts:          c.fronts,
-			updateMutex:     c.updateMutex,
 			dial:            c.dial,
 			serverPublicKey: c.serverPublicKey,
 			selectedFront:   selectedFront,
