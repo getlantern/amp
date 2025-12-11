@@ -45,6 +45,12 @@ func NewClientWithConfig(ctx context.Context, cfg Config, opts ...Option) (Clien
 		}
 	}
 
+	conn, err := establishConn(cli.dial, cfg.Fronts)
+	if err != nil {
+		return nil, err
+	}
+	cli.conn = conn
+
 	cli.keepCurrent(ctx)
 	return cli, nil
 }

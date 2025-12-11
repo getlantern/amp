@@ -37,6 +37,7 @@ type client struct {
 	configURL    string
 	pollInterval time.Duration
 	updateMutex  sync.RWMutex
+	conn         net.Conn
 }
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")
@@ -51,6 +52,11 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 	if dialer == nil {
 		dialer = (&net.Dialer{}).Dial
 	}
+	conn, err := establishConn(dialer, fronts)
+	if err != nil {
+		return nil, err
+	}
+
 	return &client{
 		brokerURL:       brokerURL,
 		cacheURL:        cacheURL,
@@ -58,7 +64,25 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 		transport:       transport,
 		dial:            dialer,
 		serverPublicKey: serverPublicKey,
+		conn:            conn,
 	}, nil
+}
+
+func establishConn(dialer dialFunc, fronts []string) (net.Conn, error) {
+	var conn net.Conn
+	for _, front := range fronts {
+		var err error
+		conn, err = dialer("tcp", front)
+		if err != nil {
+			slog.Warn("failed to dial to front host", slog.String("front", front), slog.Any("error", err))
+			continue
+		}
+		break
+	}
+	if conn == nil {
+		return nil, fmt.Errorf("couldn't establish connection")
+	}
+	return conn, nil
 }
 
 // Exchange sends an encoded payload to the AMP broker and returns the response.
@@ -187,7 +211,7 @@ func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("couldn't encode request: %w", err)
 	}
-	ampConn, err := NewAMPClientConn(r.brokerURL, r.cacheURL, r.fronts, r.dial)
+	ampConn, err := NewAMPClientConn(r.conn, r.brokerURL, r.cacheURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AMP client conn: %w", err)
 	}

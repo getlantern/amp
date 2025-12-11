@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -30,12 +29,11 @@ type dialFunc func(network, address string) (net.Conn, error)
 
 // NewAMPClientConn creates a new AMP client connection that implements net.Conn.
 // This connection is not encrypted!
-func NewAMPClientConn(brokerURL, cacheURL *url.URL, fronts []string, dialer dialFunc) (net.Conn, error) {
+func NewAMPClientConn(conn net.Conn, brokerURL, cacheURL *url.URL) (net.Conn, error) {
 	return &ampClientConn{
 		brokerURL: brokerURL,
 		cacheURL:  cacheURL,
-		fronts:    fronts,
-		dial:      dialer,
+		Conn:      conn,
 	}, nil
 }
 
@@ -120,21 +118,8 @@ func (c *ampClientConn) Write(b []byte) (n int, err error) {
 
 	c.req = req
 
-	if len(c.fronts) != 0 {
-		// Do domain fronting. Replace the domain in the URL's with a randomly
-		// selected front, and store the original domain the HTTP Host header.
-		front := c.fronts[rand.Intn(len(c.fronts))]
-		slog.Info("Selected front domain", slog.String("front", front))
-		c.req.Host = req.URL.Host
-		c.req.URL.Host = front
-	}
-
 	if c.Conn == nil {
-		conn, err := c.dial("tcp", c.req.URL.Host)
-		if err != nil {
-			return 0, fmt.Errorf("failed to dial host %s: %w", c.req.URL.Host, err)
-		}
-		c.Conn = conn
+		return 0, fmt.Errorf("connection not created")
 	}
 
 	buffer := bytes.NewBuffer(nil)
