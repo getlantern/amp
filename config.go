@@ -45,13 +45,6 @@ func NewClientWithConfig(ctx context.Context, cfg Config, opts ...Option) (Clien
 		}
 	}
 
-	conn, selectedFront, err := establishConn(cli.dial, cfg.Fronts)
-	if err != nil {
-		return nil, err
-	}
-	cli.conn = conn
-	cli.selectedFront = selectedFront
-
 	cli.keepCurrent(ctx)
 	return cli, nil
 }
@@ -201,19 +194,7 @@ func (c *client) parseConfig(cfg Config) error {
 	c.brokerURL = brokerURL
 	c.cacheURL = cacheURL
 	c.serverPublicKey = publicKey
-	if len(cfg.Fronts) != 0 {
-		c.fronts = cfg.Fronts
-		// if there's new fronts, establish a new conn
-		conn, selectedFront, err := establishConn(c.dial, c.fronts)
-		if err != nil {
-			return err
-		}
-		c.selectedFront = selectedFront
-		if c.conn != nil {
-			c.conn.Close()
-		}
-		c.conn = conn
-	}
+	c.fronts = cfg.Fronts
 	return nil
 }
 

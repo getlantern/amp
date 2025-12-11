@@ -98,18 +98,11 @@ func TestClient_Exchange(t *testing.T) {
 
 func TestNewClientDefaults(t *testing.T) {
 	brokerURL, _ := url.Parse("https://broker.example")
-	t.Run("new client without fronts and dial operation should produce an error", func(t *testing.T) {
-		cli, err := NewClient(brokerURL, nil, nil, http.DefaultTransport, &rsa.PublicKey{}, nil)
-		assert.Error(t, err)
-		assert.Nil(t, cli)
+	cli, err := NewClient(brokerURL, nil, []string{""}, http.DefaultTransport, &rsa.PublicKey{}, func(_, _ string) (net.Conn, error) {
+		return &mockConn{}, nil
 	})
-	t.Run("building client with required fields should produce no error", func(t *testing.T) {
-		cli, err := NewClient(brokerURL, nil, []string{""}, http.DefaultTransport, &rsa.PublicKey{}, func(_, _ string) (net.Conn, error) {
-			return &mockConn{}, nil
-		})
-		assert.NoError(t, err)
-		assert.NotNil(t, cli)
-	})
+	assert.NoError(t, err)
+	assert.NotNil(t, cli)
 }
 
 func generateTestKey(t *testing.T) *rsa.PrivateKey {
