@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,23 +18,22 @@ type ampClientConn struct {
 	net.Conn
 	brokerURL      *url.URL
 	cacheURL       *url.URL
-	fronts         []string
 	req            *http.Request
 	decoder        io.Reader
 	responseCloser io.Closer
-	dial           dialFunc
+	front          string
 }
 
 type dialFunc func(network, address string) (net.Conn, error)
 
 // NewAMPClientConn creates a new AMP client connection that implements net.Conn.
 // This connection is not encrypted!
-func NewAMPClientConn(brokerURL, cacheURL *url.URL, fronts []string, dialer dialFunc) (net.Conn, error) {
+func NewAMPClientConn(conn net.Conn, brokerURL, cacheURL *url.URL, front string) (net.Conn, error) {
 	return &ampClientConn{
 		brokerURL: brokerURL,
 		cacheURL:  cacheURL,
-		fronts:    fronts,
-		dial:      dialer,
+		Conn:      conn,
+		front:     front,
 	}, nil
 }
 
@@ -117,24 +115,15 @@ func (c *ampClientConn) Write(b []byte) (n int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to create new HTTP request: %w", err)
 	}
-
 	c.req = req
 
-	if len(c.fronts) != 0 {
-		// Do domain fronting. Replace the domain in the URL's with a randomly
-		// selected front, and store the original domain the HTTP Host header.
-		front := c.fronts[rand.Intn(len(c.fronts))]
-		slog.Info("Selected front domain", slog.String("front", front))
+	if c.front != "" {
 		c.req.Host = req.URL.Host
-		c.req.URL.Host = front
+		c.req.URL.Host = c.front
 	}
 
 	if c.Conn == nil {
-		conn, err := c.dial("tcp", c.req.URL.Host)
-		if err != nil {
-			return 0, fmt.Errorf("failed to dial host %s: %w", c.req.URL.Host, err)
-		}
-		c.Conn = conn
+		return 0, fmt.Errorf("connection not established")
 	}
 
 	buffer := bytes.NewBuffer(nil)

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -50,7 +51,9 @@ func TestBroker_Handle_Integration(t *testing.T) {
 	brokerURL, err := url.Parse(brokerSrv.URL)
 	require.NoError(t, err)
 
-	client, err := NewClient(brokerURL, nil, nil, http.DefaultTransport, pub, nil)
+	client, err := NewClient(brokerURL, nil, []string{""}, http.DefaultTransport, pub, func(network string, address string) (net.Conn, error) {
+		return net.Dial(network, brokerURL.Host)
+	})
 	require.NoError(t, err)
 
 	type testCase struct {

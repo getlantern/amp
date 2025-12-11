@@ -33,10 +33,12 @@ type client struct {
 	dial            dialFunc
 	serverPublicKey *rsa.PublicKey
 
-	httpClient   *http.Client
-	configURL    string
-	pollInterval time.Duration
-	updateMutex  sync.RWMutex
+	httpClient    *http.Client
+	configURL     string
+	pollInterval  time.Duration
+	updateMutex   sync.Mutex
+	conn          net.Conn
+	selectedFront string
 }
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")
@@ -51,6 +53,11 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 	if dialer == nil {
 		dialer = (&net.Dialer{}).Dial
 	}
+	conn, selectedFront, err := establishConn(dialer, fronts)
+	if err != nil {
+		return nil, err
+	}
+
 	return &client{
 		brokerURL:       brokerURL,
 		cacheURL:        cacheURL,
@@ -58,13 +65,29 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 		transport:       transport,
 		dial:            dialer,
 		serverPublicKey: serverPublicKey,
+		conn:            conn,
+		selectedFront:   selectedFront,
 	}, nil
+}
+
+func establishConn(dialer dialFunc, fronts []string) (net.Conn, string, error) {
+	var conn net.Conn
+	for _, front := range fronts {
+		var err error
+		conn, err = dialer("tcp", fmt.Sprintf("%s:443", front))
+		if err != nil {
+			slog.Warn("failed to dial to front host", slog.String("front", front), slog.Any("error", err))
+			continue
+		}
+		return conn, front, nil
+	}
+	return nil, "", fmt.Errorf("couldn't establish connection")
 }
 
 // Exchange sends an encoded payload to the AMP broker and returns the response.
 func (c *client) Exchange(encodedPayload []byte) (io.ReadCloser, error) {
-	c.updateMutex.RLock()
-	defer c.updateMutex.RUnlock()
+	c.updateMutex.Lock()
+	defer c.updateMutex.Unlock()
 	// We cannot POST a body through an AMP cache, so instead we GET and
 	// encode the client poll request message into the URL.
 	reqURL := c.brokerURL.ResolveReference(&url.URL{
@@ -181,13 +204,13 @@ type BrokerResponse struct {
 // with the server public key, send it to the AMP broker and decode
 // the response back into an HTTP response.
 func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	r.updateMutex.RLock()
-	defer r.updateMutex.RUnlock()
+	r.updateMutex.Lock()
+	defer r.updateMutex.Unlock()
 	clientPayload, err := r.encodeClientRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't encode request: %w", err)
 	}
-	ampConn, err := NewAMPClientConn(r.brokerURL, r.cacheURL, r.fronts, r.dial)
+	ampConn, err := NewAMPClientConn(r.conn, r.brokerURL, r.cacheURL, r.selectedFront)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AMP client conn: %w", err)
 	}
@@ -196,7 +219,6 @@ func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create crypt conn: %w", err)
 	}
-	defer encryptedConn.Close()
 
 	_, err = encryptedConn.Write(clientPayload)
 	if err != nil {
