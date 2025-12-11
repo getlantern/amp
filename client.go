@@ -36,7 +36,7 @@ type client struct {
 	httpClient    *http.Client
 	configURL     string
 	pollInterval  time.Duration
-	updateMutex   sync.RWMutex
+	updateMutex   sync.Mutex
 	conn          net.Conn
 	selectedFront string
 }
@@ -86,8 +86,8 @@ func establishConn(dialer dialFunc, fronts []string) (net.Conn, string, error) {
 
 // Exchange sends an encoded payload to the AMP broker and returns the response.
 func (c *client) Exchange(encodedPayload []byte) (io.ReadCloser, error) {
-	c.updateMutex.RLock()
-	defer c.updateMutex.RUnlock()
+	c.updateMutex.Lock()
+	defer c.updateMutex.Unlock()
 	// We cannot POST a body through an AMP cache, so instead we GET and
 	// encode the client poll request message into the URL.
 	reqURL := c.brokerURL.ResolveReference(&url.URL{
@@ -204,8 +204,8 @@ type BrokerResponse struct {
 // with the server public key, send it to the AMP broker and decode
 // the response back into an HTTP response.
 func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	r.updateMutex.RLock()
-	defer r.updateMutex.RUnlock()
+	r.updateMutex.Lock()
+	defer r.updateMutex.Unlock()
 	clientPayload, err := r.encodeClientRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't encode request: %w", err)
