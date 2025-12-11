@@ -53,10 +53,6 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 	if dialer == nil {
 		dialer = (&net.Dialer{}).Dial
 	}
-	conn, selectedFront, err := establishConn(dialer, fronts)
-	if err != nil {
-		return nil, err
-	}
 
 	return &client{
 		brokerURL:       brokerURL,
@@ -65,8 +61,6 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 		transport:       transport,
 		dial:            dialer,
 		serverPublicKey: serverPublicKey,
-		conn:            conn,
-		selectedFront:   selectedFront,
 	}, nil
 }
 
@@ -257,5 +251,20 @@ func (r *roundTripper) encodeClientRequest(req *http.Request) ([]byte, error) {
 
 // RoundTripper returns an http.RoundTripper that can be used to send HTTP requests
 func (c *client) RoundTripper() (http.RoundTripper, error) {
-	return &roundTripper{client: c}, nil
+	conn, selectedFront, err := establishConn(c.dial, c.fronts)
+	if err != nil {
+		return nil, err
+	}
+	return &roundTripper{
+		client: &client{
+			brokerURL:       c.brokerURL,
+			cacheURL:        c.cacheURL,
+			fronts:          c.fronts,
+			updateMutex:     c.updateMutex,
+			dial:            c.dial,
+			serverPublicKey: c.serverPublicKey,
+			selectedFront:   selectedFront,
+			conn:            conn,
+		},
+	}, nil
 }
