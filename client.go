@@ -74,7 +74,7 @@ func establishConn(dialer dialFunc, fronts []string) (net.Conn, string, error) {
 	var conn net.Conn
 	for _, front := range fronts {
 		var err error
-		conn, err = dialer("tcp", front)
+		conn, err = dialer("tcp", fmt.Sprintf("%s:443", front))
 		if err != nil {
 			slog.Warn("failed to dial to front host", slog.String("front", front), slog.Any("error", err))
 			continue
