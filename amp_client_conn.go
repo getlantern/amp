@@ -22,18 +22,16 @@ type ampClientConn struct {
 	req            *http.Request
 	decoder        io.Reader
 	responseCloser io.Closer
-	dial           dialFunc
 }
 
 type dialFunc func(network, address string) (net.Conn, error)
 
 // NewAMPClientConn creates a new AMP client connection that implements net.Conn.
 // This connection is not encrypted!
-func NewAMPClientConn(conn net.Conn, brokerURL, cacheURL *url.URL, dial dialFunc) (net.Conn, error) {
+func NewAMPClientConn(conn net.Conn, brokerURL, cacheURL *url.URL) (net.Conn, error) {
 	return &ampClientConn{
 		brokerURL: brokerURL,
 		cacheURL:  cacheURL,
-		dial:      dial,
 		Conn:      conn,
 	}, nil
 }
