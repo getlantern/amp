@@ -70,6 +70,9 @@ func NewClient(brokerURL, cacheURL *url.URL, fronts []string, transport http.Rou
 
 func establishConn(dialer dialFunc, fronts []string) (net.Conn, error) {
 	var conn net.Conn
+	if len(fronts) == 0 {
+		return nil, nil
+	}
 	for _, front := range fronts {
 		var err error
 		conn, err = dialer("tcp", front)
@@ -211,7 +214,7 @@ func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("couldn't encode request: %w", err)
 	}
-	ampConn, err := NewAMPClientConn(r.conn, r.brokerURL, r.cacheURL)
+	ampConn, err := NewAMPClientConn(r.conn, r.brokerURL, r.cacheURL, r.dial)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AMP client conn: %w", err)
 	}
@@ -220,7 +223,6 @@ func (r *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create crypt conn: %w", err)
 	}
-	defer encryptedConn.Close()
 
 	_, err = encryptedConn.Write(clientPayload)
 	if err != nil {

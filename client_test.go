@@ -210,7 +210,7 @@ func TestRoundTripper_RoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, err := NewClient(brokerURL, nil, nil, http.DefaultTransport, &privateKey.PublicKey, tt.dial)
+			c, err := NewClient(brokerURL, nil, []string{""}, http.DefaultTransport, &privateKey.PublicKey, tt.dial)
 			require.NoError(t, err)
 			rt, err := c.RoundTripper()
 			require.NoError(t, err)

@@ -29,10 +29,11 @@ type dialFunc func(network, address string) (net.Conn, error)
 
 // NewAMPClientConn creates a new AMP client connection that implements net.Conn.
 // This connection is not encrypted!
-func NewAMPClientConn(conn net.Conn, brokerURL, cacheURL *url.URL) (net.Conn, error) {
+func NewAMPClientConn(conn net.Conn, brokerURL, cacheURL *url.URL, dial dialFunc) (net.Conn, error) {
 	return &ampClientConn{
 		brokerURL: brokerURL,
 		cacheURL:  cacheURL,
+		dial:      dial,
 		Conn:      conn,
 	}, nil
 }
@@ -115,11 +116,10 @@ func (c *ampClientConn) Write(b []byte) (n int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to create new HTTP request: %w", err)
 	}
-
 	c.req = req
 
 	if c.Conn == nil {
-		return 0, fmt.Errorf("connection not created")
+		return 0, fmt.Errorf("connection not established")
 	}
 
 	buffer := bytes.NewBuffer(nil)
