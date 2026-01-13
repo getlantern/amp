@@ -107,6 +107,9 @@ func WithConfigURL(configURL string) Option {
 // WithConfigStoragePath set the filepath to store the retrieved config locally.
 func WithConfigStoragePath(storagePath string) Option {
 	return func(c *client) error {
+		c.storageMutex.Lock()
+		defer c.storageMutex.Unlock()
+
 		c.storageFilePath = filepath.Join(storagePath, "amp_config.yml.gz")
 		if gzippedYAML, err := os.ReadFile(c.storageFilePath); err == nil {
 			cfg, err := processYaml(gzippedYAML)
@@ -223,9 +226,11 @@ func (c *client) parseConfig(cfg Config) error {
 
 func (c *client) onNewConfig(gzippedYML []byte) error {
 	if c.storageFilePath != "" {
+		c.storageMutex.Lock()
 		if err := os.WriteFile(c.storageFilePath, gzippedYML, 0x644); err != nil {
 			slog.Warn("failed to store new amp config", slog.Any("error", err))
 		}
+		c.storageMutex.Unlock()
 	}
 
 	cfg, err := processYaml(gzippedYML)
