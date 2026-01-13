@@ -110,7 +110,7 @@ func WithConfigStoragePath(storagePath string) Option {
 		if storagePath == "" {
 			return fmt.Errorf("invalid directory path provided: %q", storagePath)
 		}
-		if err := os.MkdirAll(storagePath, 0644); err != nil {
+		if err := os.MkdirAll(storagePath, 0755); err != nil {
 			return fmt.Errorf("failed to create storage path: %w", err)
 		}
 
