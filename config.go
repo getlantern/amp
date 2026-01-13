@@ -105,7 +105,7 @@ func WithConfigURL(configURL string) Option {
 	}
 }
 
-// WithConfigStoragePath set the filepath to store the retrieved config locally.
+// WithConfigStoragePath sets the filepath to store the retrieved config locally.
 func WithConfigStoragePath(storagePath string) Option {
 	return func(c *client) error {
 		if storagePath == "" {
