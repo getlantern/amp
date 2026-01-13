@@ -33,12 +33,13 @@ type client struct {
 	dial            dialFunc
 	serverPublicKey *rsa.PublicKey
 
-	httpClient    *http.Client
-	configURL     string
-	pollInterval  time.Duration
-	updateMutex   sync.Mutex
-	conn          net.Conn
-	selectedFront string
+	httpClient      *http.Client
+	configURL       string
+	pollInterval    time.Duration
+	updateMutex     sync.Mutex
+	conn            net.Conn
+	selectedFront   string
+	storageFilePath string
 }
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")

@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -28,16 +30,16 @@ type Config struct {
 	PublicKey string   `yaml:"publicKey"`
 }
 
-// NewClientWithConfig builds a new amp client with the provided configuration.
-// It also supports options for retrieving the latest configuration given a poll
+// NewClientWithConfig builds a new amp client with the provided options.
+// It supports options for retrieving the latest configuration given a poll
 // interval, http client and config url address until context is canceled.
-func NewClientWithConfig(ctx context.Context, cfg Config, opts ...Option) (Client, error) {
+// If the config storage path option is provided and the file exists, the client
+// will load the config and use it; the config updater will also store the
+// latest changes in the provided path.
+func NewClientWithConfig(ctx context.Context, opts ...Option) (Client, error) {
 	cli := &client{
 		dial:         (&net.Dialer{}).Dial,
 		pollInterval: 12 * time.Hour,
-	}
-	if err := cli.parseConfig(cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 	for _, opt := range opts {
 		if err := opt(cli); err != nil {
@@ -70,6 +72,12 @@ func parseRSAPublicKeyFromPEM(pemBytes []byte) (*rsa.PublicKey, error) {
 // Option is a function type used to configure the amp client instance.
 type Option func(*client) error
 
+func WithConfig(cfg Config) Option {
+	return func(c *client) error {
+		return c.parseConfig(cfg)
+	}
+}
+
 // WithHTTPClient sets the HTTP client used during the configuration
 // synchronization.
 func WithHTTPClient(httpClient *http.Client) Option {
@@ -92,6 +100,21 @@ func WithPollInterval(t time.Duration) Option {
 func WithConfigURL(configURL string) Option {
 	return func(c *client) error {
 		c.configURL = configURL
+		return nil
+	}
+}
+
+// WithConfigStoragePath set the filepath to store the retrieved config locally.
+func WithConfigStoragePath(storagePath string) Option {
+	return func(c *client) error {
+		c.storageFilePath = filepath.Join(storagePath, "amp_config.yml.gz")
+		if gzippedYAML, err := os.ReadFile(c.storageFilePath); err == nil {
+			cfg, err := processYaml(gzippedYAML)
+			if err != nil {
+				return fmt.Errorf("failed to process amp config: %w", err)
+			}
+			return c.parseConfig(cfg)
+		}
 		return nil
 	}
 }
@@ -199,10 +222,15 @@ func (c *client) parseConfig(cfg Config) error {
 }
 
 func (c *client) onNewConfig(gzippedYML []byte) error {
+	if c.storageFilePath != "" {
+		if err := os.WriteFile(c.storageFilePath, gzippedYML, 0x644); err != nil {
+			slog.Warn("failed to store new amp config", slog.Any("error", err))
+		}
+	}
+
 	cfg, err := processYaml(gzippedYML)
 	if err != nil {
 		return fmt.Errorf("failed to process amp config: %w", err)
 	}
-
 	return c.parseConfig(cfg)
 }
