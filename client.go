@@ -39,6 +39,9 @@ type client struct {
 	updateMutex   sync.Mutex
 	conn          net.Conn
 	selectedFront string
+
+	storageFilePath string
+	storageMutex    sync.Mutex
 }
 
 var errUnexpectedBrokerError = errors.New("unexpected broker error")

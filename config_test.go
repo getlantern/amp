@@ -80,7 +80,7 @@ func TestNewClientWithConfig_InvalidURLs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, err := NewClientWithConfig(ctx, tt.cfg)
+			client, err := NewClientWithOptions(ctx, WithConfig(tt.cfg))
 			if tt.expectErr {
 				assert.Error(t, err)
 				assert.Nil(t, client)
