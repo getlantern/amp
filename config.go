@@ -110,9 +110,12 @@ func WithConfigStoragePath(storagePath string) Option {
 		if storagePath == "" {
 			return fmt.Errorf("invalid directory path provided: %q", storagePath)
 		}
+		if err := os.MkdirAll(storagePath, 0644); err != nil {
+			return fmt.Errorf("failed to create storage path: %w", err)
+		}
+
 		c.storageMutex.Lock()
 		defer c.storageMutex.Unlock()
-
 		c.storageFilePath = filepath.Join(storagePath, "amp_config.yml.gz")
 		if gzippedYAML, err := os.ReadFile(c.storageFilePath); err == nil {
 			cfg, err := processYaml(gzippedYAML)
