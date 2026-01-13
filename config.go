@@ -107,6 +107,9 @@ func WithConfigURL(configURL string) Option {
 // WithConfigStoragePath set the filepath to store the retrieved config locally.
 func WithConfigStoragePath(storagePath string) Option {
 	return func(c *client) error {
+		if storagePath == "" {
+			return fmt.Errorf("invalid directory path provided: %q", storagePath)
+		}
 		c.storageMutex.Lock()
 		defer c.storageMutex.Unlock()
 
