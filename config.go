@@ -30,13 +30,13 @@ type Config struct {
 	PublicKey string   `yaml:"publicKey"`
 }
 
-// NewClientWithConfig builds a new amp client with the provided options.
+// NewClientWithOptions builds a new amp client with the provided options.
 // It supports options for retrieving the latest configuration given a poll
 // interval, http client and config url address until context is canceled.
 // If the config storage path option is provided and the file exists, the client
 // will load the config and use it; the config updater will also store the
 // latest changes in the provided path.
-func NewClientWithConfig(ctx context.Context, opts ...Option) (Client, error) {
+func NewClientWithOptions(ctx context.Context, opts ...Option) (Client, error) {
 	cli := &client{
 		dial:         (&net.Dialer{}).Dial,
 		pollInterval: 12 * time.Hour,
