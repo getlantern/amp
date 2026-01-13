@@ -121,7 +121,8 @@ func WithConfigStoragePath(storagePath string) Option {
 		if gzippedYAML, err := os.ReadFile(c.storageFilePath); err == nil {
 			cfg, err := processYaml(gzippedYAML)
 			if err != nil {
-				return fmt.Errorf("failed to process amp config: %w", err)
+				slog.Warn("failed to process local amp config, ignoring local config", slog.String("storage_filepath", c.storageFilePath), slog.Any("error", err))
+				return nil
 			}
 			return c.parseConfig(cfg)
 		}
