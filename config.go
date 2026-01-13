@@ -72,6 +72,7 @@ func parseRSAPublicKeyFromPEM(pemBytes []byte) (*rsa.PublicKey, error) {
 // Option is a function type used to configure the amp client instance.
 type Option func(*client) error
 
+// WithConfig set the initial configuration for the amp client
 func WithConfig(cfg Config) Option {
 	return func(c *client) error {
 		return c.parseConfig(cfg)
