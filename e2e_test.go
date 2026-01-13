@@ -39,7 +39,7 @@ func TestE2E(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	client, err := NewClientWithConfig(ctx, config, WithDialer(dial))
+	client, err := NewClientWithConfig(ctx, WithConfig(config), WithDialer(dial))
 	require.NoError(t, err)
 	req, err := http.NewRequest(http.MethodGet, "https://detectportal.firefox.com/success.txt", http.NoBody)
 	require.NoError(t, err)
