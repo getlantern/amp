@@ -230,7 +230,7 @@ func (c *client) parseConfig(cfg Config) error {
 func (c *client) onNewConfig(gzippedYML []byte) error {
 	if c.storageFilePath != "" {
 		c.storageMutex.Lock()
-		if err := os.WriteFile(c.storageFilePath, gzippedYML, 0x644); err != nil {
+		if err := os.WriteFile(c.storageFilePath, gzippedYML, 0644); err != nil {
 			slog.Warn("failed to store new amp config", slog.Any("error", err))
 		}
 		c.storageMutex.Unlock()
