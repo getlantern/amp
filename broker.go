@@ -82,7 +82,7 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 		slog.WarnContext(ctx, "failed to parse client URL", slog.Any("error", err))
 	} else {
 		span.SetAttributes(
-			semconv.ServerAddress(parsedURL.Host),
+			semconv.ServerAddress(parsedURL.Hostname()),
 			semconv.URLScheme(parsedURL.Scheme),
 			semconv.URLPath(parsedURL.Path),
 		)
