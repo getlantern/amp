@@ -11,11 +11,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/amp"
-	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -69,14 +70,28 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	clientPayloadReader := bytes.NewReader(ampRequest.ClientRequest.Body)
 
-	trace.SpanFromContext(ctx).AddEvent("decoded_amp_request", trace.WithAttributes(
-		attribute.String("method", ampRequest.ClientRequest.Method),
-		attribute.String("url", ampRequest.ClientRequest.URL),
-	))
-	req, err := http.NewRequestWithContext(ctx, ampRequest.ClientRequest.Method, ampRequest.ClientRequest.URL, bytes.NewReader(ampRequest.ClientRequest.Body))
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(
+		semconv.HTTPRequestMethodOriginal(ampRequest.ClientRequest.Method),
+		semconv.HTTPRequestBodySize(clientPayloadReader.Len()),
+	)
+	parsedURL, err := url.Parse(ampRequest.ClientRequest.URL)
+	if err != nil {
+		slog.WarnContext(ctx, "failed to parse client URL", slog.Any("error", err))
+	} else {
+		span.SetAttributes(
+			semconv.ServerAddress(parsedURL.Hostname()),
+			semconv.URLScheme(parsedURL.Scheme),
+			semconv.URLPath(parsedURL.Path),
+		)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, ampRequest.ClientRequest.Method, ampRequest.ClientRequest.URL, clientPayloadReader)
 	if err != nil {
 		slog.ErrorContext(ctx, "error creating request", slog.Any("error", err))
+		span.RecordError(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -84,6 +99,7 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 	serverResponse, err := b.client.Do(req)
 	if err != nil {
 		slog.ErrorContext(ctx, "error making request to server", slog.Any("error", err), slog.String("url", ampRequest.ClientRequest.URL))
+		span.RecordError(err)
 		w.WriteHeader(http.StatusBadGateway)
 		return
 	}
@@ -91,6 +107,7 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 	encodedResponse, err := encodeResponse(ampRequest, serverResponse)
 	if err != nil {
 		slog.ErrorContext(ctx, "error encoding response", slog.Any("error", err))
+		span.RecordError(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -98,6 +115,7 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 	enc, err := amp.NewArmorEncoder(w)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to create armor encoder", slog.Any("error", err))
+		span.RecordError(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -105,6 +123,7 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := enc.Write(encodedResponse); err != nil {
 		slog.ErrorContext(ctx, "failed to write encoded response", slog.Any("error", err))
+		span.RecordError(err)
 		return
 	}
 
