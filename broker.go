@@ -72,16 +72,15 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 	clientPayloadReader := bytes.NewReader(ampRequest.ClientRequest.Body)
 
-	parsedURL, err := url.Parse(ampRequest.ClientRequest.URL)
-	if err != nil {
-		slog.WarnContext(ctx, "failed to parse client URL", slog.Any("error", err))
-	}
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
 		semconv.HTTPRequestMethodOriginal(ampRequest.ClientRequest.Method),
 		semconv.HTTPRequestBodySize(clientPayloadReader.Len()),
 	)
-	if parsedURL != nil {
+	parsedURL, err := url.Parse(ampRequest.ClientRequest.URL)
+	if err != nil {
+		slog.WarnContext(ctx, "failed to parse client URL", slog.Any("error", err))
+	} else {
 		span.SetAttributes(
 			semconv.ServerAddress(parsedURL.Host),
 			semconv.URLScheme(parsedURL.Scheme),
