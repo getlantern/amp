@@ -2,7 +2,6 @@ package amp
 
 import (
 	"bytes"
-	"context"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
@@ -22,9 +21,8 @@ import (
 )
 
 type broker struct {
-	requestTimeout time.Duration
-	privateKey     *rsa.PrivateKey
-	client         *http.Client
+	privateKey *rsa.PrivateKey
+	client     *http.Client
 }
 
 type Broker interface {
@@ -33,7 +31,7 @@ type Broker interface {
 
 // NewBroker creates a new Broker instance with the specified client timeout,
 // private key for decrypting client requests, and an optional HTTP client.
-func NewBroker(clientTimeout time.Duration, privateKey *rsa.PrivateKey, client *http.Client) Broker {
+func NewBroker(privateKey *rsa.PrivateKey, client *http.Client) Broker {
 	if client == nil {
 		client = &http.Client{
 			Transport: http.DefaultTransport,
@@ -41,17 +39,14 @@ func NewBroker(clientTimeout time.Duration, privateKey *rsa.PrivateKey, client *
 		}
 	}
 	return &broker{
-		requestTimeout: clientTimeout,
-		privateKey:     privateKey,
-		client:         client,
+		privateKey: privateKey,
+		client:     client,
 	}
 }
 
 // Handle processes incoming HTTP requests for the AMP client offers.
 func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), b.requestTimeout*time.Second)
-	defer cancel()
-
+	ctx := r.Context()
 	// The encoded client poll message immediately follows the /amp/client/
 	// path prefix, so this function unfortunately needs to be aware of and
 	// remove its own routing prefix.

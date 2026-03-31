@@ -24,7 +24,7 @@ func newTestKeyPair(t *testing.T) (*rsa.PrivateKey, *rsa.PublicKey) {
 
 func TestBroker_Handle_Integration(t *testing.T) {
 	priv, pub := newTestKeyPair(t)
-	broker := NewBroker(1, priv, nil)
+	broker := NewBroker(priv, nil)
 
 	// Start test HTTP server for the broker to forward requests to
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +126,7 @@ func TestBroker_Handle_Integration(t *testing.T) {
 
 func TestBroker_Handle_InvalidPath(t *testing.T) {
 	priv, _ := newTestKeyPair(t)
-	broker := NewBroker(1, priv, nil)
+	broker := NewBroker(priv, nil)
 	req := httptest.NewRequest("GET", "/amp/invalidprefix/foobar", nil)
 	w := httptest.NewRecorder()
 	broker.Handle(w, req)
