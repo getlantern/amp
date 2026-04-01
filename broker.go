@@ -2,6 +2,7 @@ package amp
 
 import (
 	"bytes"
+	"context"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/amp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -66,22 +69,7 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clientPayloadReader := bytes.NewReader(ampRequest.ClientRequest.Body)
-
-	span := trace.SpanFromContext(ctx)
-	span.SetAttributes(
-		semconv.HTTPRequestMethodOriginal(ampRequest.ClientRequest.Method),
-		semconv.HTTPRequestBodySize(clientPayloadReader.Len()),
-	)
-	parsedURL, err := url.Parse(ampRequest.ClientRequest.URL)
-	if err != nil {
-		slog.WarnContext(ctx, "failed to parse client URL", slog.Any("error", err))
-	} else {
-		span.SetAttributes(
-			semconv.ServerAddress(parsedURL.Hostname()),
-			semconv.URLScheme(parsedURL.Scheme),
-			semconv.URLPath(parsedURL.Path),
-		)
-	}
+	span := handleTrace(ctx, ampRequest, clientPayloadReader.Len())
 
 	req, err := http.NewRequestWithContext(ctx, ampRequest.ClientRequest.Method, ampRequest.ClientRequest.URL, clientPayloadReader)
 	if err != nil {
@@ -129,6 +117,32 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 	// https://developers.google.com/amp/cache/overview#google-amp-cache-updates
 	w.Header().Set("Cache-Control", "max-age=15")
 	w.WriteHeader(http.StatusOK)
+}
+
+func handleTrace(ctx context.Context, ampRequest *AMPRequest, clientPayloadReaderLen int) trace.Span {
+	span := trace.SpanFromContext(ctx)
+
+	// adding link to external trace since it's only available after decoding the amp request
+	extractedParentCtx := otel.GetTextMapPropagator().Extract(context.Background(), propagation.HeaderCarrier(ampRequest.ClientRequest.Headers))
+	if parentSpanCtx := trace.SpanContextFromContext(extractedParentCtx); parentSpanCtx.IsValid() && parentSpanCtx.IsRemote() && !parentSpanCtx.Equal(span.SpanContext()) {
+		span.AddLink(trace.LinkFromContext(extractedParentCtx))
+	}
+
+	span.SetAttributes(
+		semconv.HTTPRequestMethodOriginal(ampRequest.ClientRequest.Method),
+		semconv.HTTPRequestBodySize(clientPayloadReaderLen),
+	)
+	parsedURL, err := url.Parse(ampRequest.ClientRequest.URL)
+	if err != nil {
+		slog.WarnContext(ctx, "failed to parse client URL", slog.Any("error", err))
+	} else {
+		span.SetAttributes(
+			semconv.ServerAddress(parsedURL.Hostname()),
+			semconv.URLScheme(parsedURL.Scheme),
+			semconv.URLPath(parsedURL.Path),
+		)
+	}
+	return span
 }
 
 func getPayload(path string, privateKey *rsa.PrivateKey) (*AMPRequest, error) {
