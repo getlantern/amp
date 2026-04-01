@@ -120,9 +120,14 @@ func (b broker) Handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleTrace(ctx context.Context, ampRequest *AMPRequest, clientPayloadReaderLen int) trace.Span {
-	extractedParentCtx := otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(ampRequest.ClientRequest.Headers))
 	span := trace.SpanFromContext(ctx)
-	span.AddLink(trace.LinkFromContext(extractedParentCtx))
+
+	// adding link to external trace since it's only available after decoding the amp request
+	extractedParentCtx := otel.GetTextMapPropagator().Extract(context.Background(), propagation.HeaderCarrier(ampRequest.ClientRequest.Headers))
+	if parentSpanCtx := trace.SpanContextFromContext(extractedParentCtx); parentSpanCtx.IsValid() && parentSpanCtx.IsRemote() && !parentSpanCtx.Equal(span.SpanContext()) {
+		span.AddLink(trace.LinkFromContext(extractedParentCtx))
+	}
+
 	span.SetAttributes(
 		semconv.HTTPRequestMethodOriginal(ampRequest.ClientRequest.Method),
 		semconv.HTTPRequestBodySize(clientPayloadReaderLen),
