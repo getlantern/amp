@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/getlantern/keepcurrent"
@@ -176,9 +175,6 @@ func (c *client) keepCurrent(ctx context.Context) {
 	slog.Debug("Updating amp configuration", slog.String("url", c.configURL))
 	source := keepcurrent.FromWebWithClient(c.configURL, c.httpClient)
 	chDB := make(chan []byte)
-	closeChan := sync.OnceFunc(func() {
-		close(chDB)
-	})
 	dest := keepcurrent.ToChannel(chDB)
 
 	runner := keepcurrent.NewWithValidator(
@@ -191,12 +187,8 @@ func (c *client) keepCurrent(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				closeChan()
 				return
-			case data, ok := <-chDB:
-				if !ok {
-					return
-				}
+			case data := <-chDB:
 				slog.Debug("received new amp configuration")
 				if err := c.onNewConfig(data); err != nil {
 					slog.Error("failed to apply new amp configuration", "error", err)
